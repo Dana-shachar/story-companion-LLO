@@ -6,9 +6,9 @@ const int PIN_G = 6;   // PWM
 const int PIN_B = 9;   // PWM
 
 const int PIN_VIB = 10;   // vibration IN
-const int PIN_BUZ = 3;    // ✅ buzzer IN (tone)  改成 D3
+const int PIN_BUZ = 3;    // ✅ buzzer IN (tone) D3
 
-// 如果你的 RGB 逻辑反了，把这个改成 true
+// If your RGB logic is inverted, change this to true
 const bool RGB_INVERT = false;
 
 // ===== Button debounce =====
@@ -39,7 +39,7 @@ struct Preset {
   uint16_t buzzOffMs;
 };
 
-// ✅ 加一个 STOP 模式（全关）作为第 0 个 preset
+// ✅ Add a STOP mode (all off) as preset 0
 Preset presets[] = {
   // name     r   g   b   ledPulse  vibOn vibOff  freq  buzOn buzOff
   {"stop",      0,   0,   0,    0,    0,   0,     0,     0,    0},
@@ -50,7 +50,7 @@ Preset presets[] = {
 };
 
 const int PRESET_COUNT = sizeof(presets) / sizeof(presets[0]);
-int presetIndex = 0;  // ✅ 默认从 stop 开始
+int presetIndex = 0;  // ✅ Default starting from stop
 
 // ===== LED breathing state =====
 unsigned long ledT0 = 0;
@@ -105,7 +105,7 @@ void applyPreset(int idx) {
   digitalWrite(PIN_VIB, LOW);
   noTone(PIN_BUZ);
 
-  // ✅ 立即更新 LED（stop 就会立刻熄灭）
+  // ✅ Update LED immediately (stop will extinguish immediately)
   writeRGB(p.r, p.g, p.b, 1.0f);
 
   // debug
@@ -156,7 +156,7 @@ void handleButton() {
 void updateLED() {
   const Preset& p = presets[presetIndex];
 
-  // ✅ stop：保持熄灯，不做呼吸
+  // ✅ stop: keep LED off, no breathing
   if (presetIndex == 0) {
     writeRGB(0, 0, 0, 1.0f);
     return;
@@ -174,7 +174,7 @@ void updateLED() {
 void updateVibration() {
   const Preset& p = presets[presetIndex];
 
-  // ✅ stop：强制关
+  // ✅ stop: force off
   if (presetIndex == 0 || p.vibOnMs == 0) {
     digitalWrite(PIN_VIB, LOW);
     vibOn = false;
@@ -202,7 +202,7 @@ void updateVibration() {
 void updateBuzzer() {
   const Preset& p = presets[presetIndex];
 
-  // ✅ stop：强制关
+  // ✅ stop: force off
   if (presetIndex == 0 || p.buzzOnMs == 0) {
     noTone(PIN_BUZ);
     buzzOn = false;
@@ -215,7 +215,7 @@ void updateBuzzer() {
     if (elapsed >= p.buzzOffMs) {
       buzzOn = true;
       buzzT0 = nowMs;
-      // passive buzzer: tone(freq). active buzzer: 也会有反应（可能是固定音）
+      // passive buzzer: tone(freq). active buzzer: will also respond (may be fixed tone)
       if (p.buzzFreqHz > 0) tone(PIN_BUZ, p.buzzFreqHz);
       else digitalWrite(PIN_BUZ, HIGH);
     }
