@@ -165,7 +165,7 @@ void updateLED() {
   unsigned long t = nowMs - ledT0;
 
   float b01 = breathing01(t, p.ledPulsePeriodMs);
-  // 最低亮度，避免完全熄灭（你也可以改小或改成 0）
+  // 最低亮度，避免完全熄灭（你也可以改小或改成 0）// Cici what does that mean? can you comment in english? lol
   b01 = 0.15f + 0.85f * b01;
 
   writeRGB(p.r, p.g, p.b, b01);

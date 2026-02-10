@@ -1,23 +1,74 @@
 body {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
+  font-family: 'Inter', sans-serif;
   margin: 0;
   padding: 20px;
-  background-color: #111;
-  color: white;
-  font-family: sans-serif;
+  background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+  min-height: 100vh;
 }
 
-canvas {
-  display: block;
-  margin-bottom: 20px;
+#title {
+  font-size: 42px;
+  text-align: center;
+  margin: 40px auto 20px;
+  font-weight: bold;
+  color: #2c3e50;
 }
-button {
+
+#select-button {
   display: block;
-  margin: 10px auto;
-  padding: 10px 20px;
-  font-size: 16px;
+  margin: 30px auto;
+  padding: 15px 40px;
+  font-size: 18px;
+  background: #2c3e50;
+  color: white;
+  border: none;
+  border-radius: 8px;
   cursor: pointer;
+  transition: background 0.3s;
+}
+
+#select-button:hover {
+  background: #34495e;
+}
+
+#select-button:disabled {
+  background: #95a5a6;
+  cursor: not-allowed;
+}
+
+#status {
+  text-align: center;
+  color: #95a5a6;
+  font-size: 16px;
+  margin: 20px;
+}
+
+#passage-display {
+  max-width: 700px;
+  margin: 40px auto;
+  padding: 40px;
+  background: #ffffff;
+  border-radius: 8px;
+  font-family: 'Literata', 'Georgia', serif;
+  font-size: 18px;
+  line-height: 1.8;
+  color: #2c3e50;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  display: none;
+}
+
+#serial-button {
+  display: block;
+  margin: 20px auto 10px auto;
+  padding: 12px 30px;
+  font-size: 16px;
+  background: #3498db;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+#serial-button:hover {
+  background: #2980b9;
 }
