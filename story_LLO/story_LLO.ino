@@ -144,14 +144,17 @@ void handleButton() {
   if ((nowMs - lastDebounceMs) > DEBOUNCE_MS) {
     // press = LOW
     if (reading == LOW) {
-      // wait release (simple)
       while (digitalRead(PIN_BTN) == LOW) { delay(5); }
 
       presetIndex = (presetIndex + 1) % PRESET_COUNT;
       applyPreset(presetIndex);
+
+      // ✅ add this line
+      Serial.println("BUTTON_PRESSED");
     }
   }
 }
+
 
 void updateLED() {
   const Preset& p = presets[presetIndex];
