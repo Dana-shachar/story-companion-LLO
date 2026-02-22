@@ -7,7 +7,7 @@ const int PIN_B = 9;   // PWM
 
 const int PIN_VIB = 10;   // vibration IN
 const int PIN_BUZ = 3;    // ✅ buzzer IN (tone) D3
-
+ 
 // If your RGB logic is inverted, change this to true
 const bool RGB_INVERT = false;
 
@@ -144,17 +144,14 @@ void handleButton() {
   if ((nowMs - lastDebounceMs) > DEBOUNCE_MS) {
     // press = LOW
     if (reading == LOW) {
+      // wait release (simple)
       while (digitalRead(PIN_BTN) == LOW) { delay(5); }
 
       presetIndex = (presetIndex + 1) % PRESET_COUNT;
       applyPreset(presetIndex);
-
-      // ✅ add this line
-      Serial.println("BUTTON_PRESSED");
     }
   }
 }
-
 
 void updateLED() {
   const Preset& p = presets[presetIndex];
@@ -168,7 +165,7 @@ void updateLED() {
   unsigned long t = nowMs - ledT0;
 
   float b01 = breathing01(t, p.ledPulsePeriodMs);
-  // 最低亮度，避免完全熄灭（你也可以改小或改成 0）// Cici what does that mean? can you comment in english? lol
+  // 最低亮度，避免完全熄灭（你也可以改小或改成 0）
   b01 = 0.15f + 0.85f * b01;
 
   writeRGB(p.r, p.g, p.b, b01);
