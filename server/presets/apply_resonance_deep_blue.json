@@ -1,0 +1,16 @@
+{
+  "cmd": "apply_resonance",
+  "led": {
+    "engine": "ambient_gen",
+    "palette": "deep_blue",
+    "speed": 0.4,
+    "brightness": 0.6,
+    "density": 0.5
+  },
+  "audio": {
+    "action": "play",
+    "track_id": 3,
+    "volume": 20,
+    "fade_in_ms": 1500
+  }
+}
