@@ -13,32 +13,20 @@ console.log(`WS server listening on ws://localhost:${PORT}`);
 
 let nextMsgId = 1;
 
-// Mode2 test json：add LLM mapping later
-function buildApplyResonance() {
-  return {
-    cmd: "apply_resonance",
-    msg_id: nextMsgId++,
-    mode: "resonance",
-    led: {
-      engine: "ambient_gen",
-      seed: Math.floor(Math.random() * 1000000),
-      duration_ms: 12000,
-      palette_id: "deep_blue",
-      motion: "flow",
-      intensity: 0.55,
-      brightness: 0.60,
-      speed: 0.35,
-      sparkle: 0.18,
-      grain: 0.10,
-      blur: 0.25,
-    },
-    audio: {
-      action: "play",
-      track_id: 5,
-      volume: 18,
-      fade_ms: 0,
-    },
-  };
+// read resonace+ add msg_id/seed
+import fs from "fs";
+
+function loadPreset(path) {
+  const raw = fs.readFileSync(path, "utf-8");
+  return JSON.parse(raw);
+}
+
+function buildApplyResonanceFromFile() {
+  const out = loadPreset("./presets/apply_resonance_deep_blue.json");
+  out.cmd = "apply_resonance";
+  out.msg_id = nextMsgId++;
+  out.led.seed = Math.floor(Math.random() * 1000000);
+  return out;
 }
 
 wss.on("connection", (ws, req) => {
