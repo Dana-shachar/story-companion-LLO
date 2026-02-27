@@ -8,32 +8,77 @@
   <link rel="stylesheet" href="style.css">
   <!-- fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com?family=Literata:wght@400;600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Literata:ital,wght@0,400;0,600&family=Inter:wght@400;600&display=swap" rel="stylesheet">
 
-  <!-- p5.js library -->
-  <script language="javascript" type="text/javascript" src="https://cdn.jsdelivr.net/npm/p5@1.2.0/lib/p5.min.js"></script>
-  
-  <!-- p5.sound -->
-  <script language="javascript" src="https://cdn.jsdelivr.net/npm/p5@1.2.0/lib/addons/p5.sound.min.js"></script>
-  
+  <!-- p5.js -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.2.0/lib/p5.min.js"></script>
+
   <!-- Howler.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/howler/2.2.3/howler.min.js"></script>
 
-  <!-- PDF.js for reading PDFs -->
+  <!-- PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script>
-  // Configure PDF.js worker
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    pdfjsLib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   </script>
-  
+
   <!-- API config (lives in project root, one level up from web/) -->
-  <script language="javascript" type="text/javascript" src="../config.js"></script>
+  <script src="../config.js"></script>
 
   <!-- sketch -->
-  <script language="javascript" type="text/javascript" src="sketch.js"></script>
+  <script src="sketch.js"></script>
 </head>
 
 <body>
-  <!-- UI goes here -->
+
+  <!-- ── SCENE PANEL (demo) ───────────────────────── -->
+  <div id="scene-panel">
+    <div id="sound-controls">
+      <button id="pause-btn">Pause</button>
+      <button id="mute-btn">Mute</button>
+    </div>
+    <button class="scene-btn">Alice in Wonderland · Down the Rabbit Hole</button>
+    <button class="scene-btn">Alice in Wonderland · Queen of Hearts</button>
+    <button class="scene-btn">Alice in Wonderland · Tea Party</button>
+    <button class="scene-btn">Frankenstein · The Creature Awakens</button>
+    <button class="scene-btn">Harry Potter · Mirror of Erised</button>
+    <button class="scene-btn">Harry Potter · You're a Wizard</button>
+    <button class="scene-btn">Harry Potter · The Forbidden Forest</button>
+    <button class="scene-btn">Lord of the Rings · Bilbo's Party</button>
+    <button class="scene-btn">Lord of the Rings · The Battle</button>
+    <button class="scene-btn">Pride &amp; Prejudice · Darcy's Proposal</button>
+    <button class="scene-btn">The Handmaid's Tale · The Wall</button>
+    <button id="random-scene-btn">Random Scene</button>
+  </div>
+
+  <!-- ── LOAD SCREEN ────────────────────────────── -->
+  <div id="load-screen">
+    <button id="load-button">Open a Book</button>
+    <div id="load-status"></div>
+    <button id="connect-button">Connect Device</button>
+  </div>
+
+  <!-- ── READER ─────────────────────────────────── -->
+  <div id="reader" style="display: none;">
+
+    <div id="reader-header">
+      <span id="book-title"></span>
+      <span id="reading-progress">0%</span>
+    </div>
+
+    <div id="progress-bar">
+      <div id="progress-fill"></div>
+    </div>
+
+    <div id="reader-text-container">
+      <div id="reading-stripe"></div>
+      <div id="reader-text"></div>
+    </div>
+
+    <div id="atmosphere-status"></div>
+
+  </div>
+
 </body>
 </html>
