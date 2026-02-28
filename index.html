@@ -34,22 +34,35 @@
 
   <!-- ── SCENE PANEL (demo) ───────────────────────── -->
   <div id="scene-panel">
+    <button id="analyze-btn">Analyze Mood</button>
     <div id="sound-controls">
-      <button id="pause-btn">Pause</button>
-      <button id="mute-btn">Mute</button>
+      <div id="playback-controls">
+        <button id="pause-btn">Pause</button>
+        <button id="mute-btn">Mute</button>
+      </div>
+      <div id="speed-label">Reading cursor speed</div>
+      <div id="speed-controls">
+        <button class="speed-btn" data-speed="0.5">×0.5</button>
+        <button class="speed-btn active" data-speed="1.0">×1.0</button>
+        <button class="speed-btn" data-speed="1.5">×1.5</button>
+        <button class="speed-btn" data-speed="2.0">×2.0</button>
+      </div>
     </div>
-    <button class="scene-btn">Alice in Wonderland · Down the Rabbit Hole</button>
-    <button class="scene-btn">Alice in Wonderland · Queen of Hearts</button>
-    <button class="scene-btn">Alice in Wonderland · Tea Party</button>
-    <button class="scene-btn">Frankenstein · The Creature Awakens</button>
-    <button class="scene-btn">Harry Potter · Mirror of Erised</button>
-    <button class="scene-btn">Harry Potter · You're a Wizard</button>
-    <button class="scene-btn">Harry Potter · The Forbidden Forest</button>
-    <button class="scene-btn">Lord of the Rings · Bilbo's Party</button>
-    <button class="scene-btn">Lord of the Rings · The Battle</button>
-    <button class="scene-btn">Pride &amp; Prejudice · Darcy's Proposal</button>
-    <button class="scene-btn">The Handmaid's Tale · The Wall</button>
-    <button id="random-scene-btn">Random Scene</button>
+    <div id="scene-list">
+      <button class="scene-btn">Alice in Wonderland · Down the Rabbit Hole</button>
+      <button class="scene-btn">Alice in Wonderland · Queen of Hearts</button>
+      <button class="scene-btn">Alice in Wonderland · Tea Party</button>
+      <button class="scene-btn">Frankenstein · The Creature Awakens</button>
+      <button class="scene-btn">Harry Potter · Mirror of Erised</button>
+      <button class="scene-btn">Harry Potter · You're a Wizard</button>
+      <button class="scene-btn">Harry Potter · The Forbidden Forest</button>
+      <button class="scene-btn">Lord of the Rings · Bilbo's Party</button>
+      <button class="scene-btn">Lord of the Rings · The Battle</button>
+      <button class="scene-btn">Pride &amp; Prejudice · Darcy's Proposal</button>
+      <button class="scene-btn">The Handmaid's Tale · The Wall</button>
+      <button id="random-scene-btn">Random Scene</button>
+      <div id="mood-display"></div>
+    </div>
   </div>
 
   <!-- ── LOAD SCREEN ────────────────────────────── -->

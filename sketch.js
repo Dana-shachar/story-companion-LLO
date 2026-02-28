@@ -2,12 +2,18 @@
 let loadScreenEl, readerEl;
 let loadButton, loadStatusEl, connectButton;
 let bookTitleEl, readingProgressEl, progressFillEl;
-let readerTextEl, readingStripeEl, atmosphereStatusEl;
+let readerTextEl, readingStripeEl, atmosphereStatusEl, moodDisplayEl;
 
 // ── Reader state ──────────────────────────────────────────────────────────────
-let allSentences    = [];
-let currentBookName = '';
-let totalBookPages  = 0;
+let allSentences       = [];
+let currentBookName    = '';
+let totalBookPages     = 0;
+let currentSentenceIdx = 0;
+let currentLineIdx     = 0;
+let linePositions      = [];
+let advanceTimer       = null;
+let speedMultiplier    = 1.0;
+let isAnalyzing        = false;
 
 // ── Web Serial ────────────────────────────────────────────────────────────────
 let port, writer, reader;
@@ -56,7 +62,7 @@ const CURATED_SCENES = [
   { book: 'Frankenstein.pdf',        startPage: 84,  endPage: 88,  mood: 'scary',      intensity: 0.9,  baseFile: 'ScaryStrings02.mp3',        textureFile: 'Storm01.mp3',          textureVol: 0.3,  startFrom: 'dreary night of November'   },
   // Harry Potter
   { book: 'HP1.pdf',                 startPage: 155, endPage: 159, mood: 'melancholy', intensity: 0.75, baseFile: 'Emotional01.mp3',           textureFile: 'Hearth01.mp3',         textureVol: 0.3,  startFrom: "'Mum?' he whispered"            },
-  { book: 'HP1.pdf',                 startPage: 43,  endPage: 47,  mood: 'mysterious', intensity: 0.8,  baseFile: 'Mysterious01.mp3',          textureFile: 'StormInterior01.mp3',  textureVol: 0.3,  startFrom: 'Hagrid stared wildly'                   },
+  { book: 'HP1.pdf',                 startPage: 43,  endPage: 51,  mood: 'mysterious', intensity: 0.8,  baseFile: 'Mysterious01.mp3',          textureFile: 'StormInterior01.mp3',  textureVol: 0.3,  startFrom: 'Hagrid stared wildly'                   },
   { book: 'HP1.pdf',                 startPage: 188, endPage: 192, mood: 'scary',      intensity: 0.85, baseFile: 'Suspense02.mp3',            textureFile: 'Forest01.mp3',         textureVol: 0.3,  startFrom: 'Harry had taken one step towards it'    },
   // Lord of the Rings
   { book: 'LOTR1.pdf',               startPage: 30,  endPage: 34,  mood: 'joyful',     intensity: 0.8,  baseFile: 'PartyCeltic01.mp3',         textureFile: 'Tavern01.mp3',         textureVol: 0.15 },
@@ -66,6 +72,22 @@ const CURATED_SCENES = [
   // The Handmaid's Tale
   { book: 'The_Handmaids_Tale.pdf',    startPage: 33,  endPage: 37,  mood: 'ominous',    intensity: 0.8,  baseFile: 'Ominous03.mp3',             textureFile: 'CityNight01.mp3',      textureVol: 0.3,  startFrom: 'Now we turn our backs'   },
 ];
+
+// ── Base-track companion map (crossfade on end, not loop) ─────────────────────
+const BASE_COMPANIONS = {
+  'Cozy01.mp3':           'Cozy02.mp3',
+  'Cozy02.mp3':           'Cozy01.mp3',
+  'Epic01.mp3':           'Epic02.mp3',
+  'Epic02.mp3':           'Epic01.mp3',
+  'HopefulStrings01.mp3': 'HopefulStrings02.mp3',
+  'HopefulStrings02.mp3': 'HopefulStrings03.mp3',
+  'HopefulStrings03.mp3': 'HopefulStrings01.mp3',
+  'Melancholy01.mp3':     'Melancholy02.mp3',
+  'Melancholy02.mp3':     'Melancholy03.mp3',
+  'Melancholy03.mp3':     'Melancholy01.mp3',
+  'PartyCeltic01.mp3':    'PartyCeltic02.mp3',
+  'PartyCeltic02.mp3':    'PartyCeltic01.mp3',
+};
 
 // ── p5 entry points ───────────────────────────────────────────────────────────
 function setup() {
@@ -82,12 +104,21 @@ function setup() {
   readerTextEl       = document.getElementById('reader-text');
   readingStripeEl    = document.getElementById('reading-stripe');
   atmosphereStatusEl = document.getElementById('atmosphere-status');
+  moodDisplayEl      = document.getElementById('mood-display');
 
   loadButton.addEventListener('click', openBook);
   connectButton.addEventListener('click', connectSerial);
 
   document.getElementById('pause-btn').addEventListener('click', togglePause);
   document.getElementById('mute-btn').addEventListener('click', toggleMute);
+
+  document.getElementById('analyze-btn').addEventListener('click', () => {
+    triggerAtmosphereAnalysis(currentSentenceIdx);
+  });
+
+  document.querySelectorAll('.speed-btn').forEach(btn => {
+    btn.addEventListener('click', () => setSpeed(parseFloat(btn.dataset.speed)));
+  });
 
   document.querySelectorAll('.scene-btn').forEach((btn, idx) => {
     btn.addEventListener('click', () => loadCuratedScene(idx));
@@ -146,7 +177,7 @@ async function openBook() {
     readerEl.style.display     = 'flex';
 
     // Position stripe on first sentence after layout settles
-    requestAnimationFrame(() => positionStripe(0));
+    startAdvancing();
 
   } catch (error) {
     console.error(error);
@@ -197,7 +228,7 @@ async function loadCuratedScene(idx) {
     loadScreenEl.style.display = 'none';
     readerEl.style.display     = 'flex';
 
-    requestAnimationFrame(() => positionStripe(0));
+    startAdvancing();
 
   } catch (error) {
     console.error(error);
@@ -207,17 +238,24 @@ async function loadCuratedScene(idx) {
 }
 
 function playCuratedAudio(scene) {
-  let baseVol = 0.4 + (scene.intensity * 0.5);
+  let baseVol   = 0.4 + (scene.intensity * 0.5);
+  let companion = BASE_COMPANIONS[scene.baseFile];
 
-  currentBase = new Howl({
+  let howl = new Howl({
     src:    [`assets/audio/base/${scene.baseFile}`],
-    loop:   true,
+    loop:   companion ? false : true,
     volume: 0
   });
-  currentBase.once('load', () => {
-    currentBase.fade(0, baseVol, 2000);
+  currentBase = howl;
+  howl.once('load', () => {
+    howl.fade(0, baseVol, 2000);
+    if (companion) {
+      howl.once('end', () => {
+        if (currentBase === howl) crossfadeBase(companion, baseVol);
+      });
+    }
   });
-  currentBase.play();
+  howl.play();
 
   if (scene.textureFile) {
     let texVol  = scene.textureVol;
@@ -234,6 +272,7 @@ function playCuratedAudio(scene) {
   applyMoodTint(moodToColor(scene.mood), scene.intensity);
   let label = scene.textureFile ? ` · ${scene.textureFile.replace(/\d+\.mp3$/i, '').toLowerCase()}` : '';
   setAtmosphereStatus(`${scene.mood}${label}`);
+  updateMoodDisplay(scene.mood, scene.textureFile ? fileBaseName(scene.textureFile) : null);
 }
 
 
@@ -250,17 +289,33 @@ async function extractText(pdf, startPage, endPage) {
     // Position-aware joining: only insert a space when there is an actual
     // visual gap between items — fixes pdf letter-spacing
     // artifact caused by joining all items with ' ' unconditionally.
-    let pageStr   = '';
-    let lastRight = null;
-    let lastY     = null;
+    let pageStr    = '';
+    let lastRight  = null;
+    let lastY      = null;
+    let lineStartX = null; // X of the first item on the current visual line (for indent detection)
     for (let item of content.items) {
       if (!item.str) continue;
       if (lastRight !== null) {
         let gapX  = item.transform[4] - lastRight;
         let gapY  = Math.abs(item.transform[5] - lastY);
-        let fSize = item.height || 10;
-        if      (gapY > fSize * 1.5)              pageStr += '\n\n'; // paragraph break
-        else if (gapY > fSize * 0.5 || gapX > 1) pageStr += ' ';
+        let fSize = Math.max(item.height || 10, 10);
+        if (gapY > fSize * 1.5) {
+          pageStr   += '\n\n'; // large vertical gap → paragraph break
+          lineStartX = item.transform[4];
+        } else if (gapY > fSize * 0.5) {
+          // New visual line — detect indent-only paragraph break:
+          // if this line starts further right than the previous line's start, it's a first-line indent
+          if (lineStartX !== null && item.transform[4] > lineStartX + Math.max(fSize * 0.5, 6)) {
+            pageStr += '\n\n';
+          } else {
+            pageStr += ' ';
+          }
+          lineStartX = item.transform[4];
+        } else if (gapX > 1) {
+          pageStr += ' ';
+        }
+      } else {
+        lineStartX = item.transform[4]; // first item on the page
       }
       pageStr   += item.str;
       lastRight  = item.transform[4] + (item.width || 0);
@@ -336,6 +391,15 @@ function renderSentences(paragraphs) {
       span.className   = 'sentence';
       span.dataset.idx = String(globalIdx++);
       span.textContent = sentence + ' ';
+      span.addEventListener('click', () => {
+        let sentIdx = parseInt(span.dataset.idx);
+        let lineIdx = linePositions.findIndex(lp => lp.sentenceIdx === sentIdx);
+        if (lineIdx === -1) return;
+        currentLineIdx = lineIdx;
+        stopAdvancing();
+        setActiveLine(lineIdx);
+        resumeAdvancing();
+      });
       p.appendChild(span);
     });
     readerTextEl.appendChild(p);
@@ -356,6 +420,77 @@ function positionStripe(idx) {
   // top relative to #reader-text-container 
   let top  = readerTextEl.offsetTop + span.offsetTop;
   readingStripeEl.style.top = top + 'px';
+}
+
+
+// =====================================================
+//   READING CURSOR
+// =====================================================
+
+let progInterval = 3500;
+
+function buildLinePositions() {
+  let lineH = parseFloat(getComputedStyle(readerTextEl).lineHeight);
+  let containerOffset = readerTextEl.offsetTop; // relative to #reader-text-container
+  let positions = [];
+  readerTextEl.querySelectorAll('.sentence').forEach(span => {
+    let numLines    = Math.max(1, Math.round(span.offsetHeight / lineH));
+    let sentenceIdx = parseInt(span.dataset.idx);
+    for (let i = 0; i < numLines; i++) {
+      positions.push({ top: containerOffset + span.offsetTop + i * lineH, sentenceIdx });
+    }
+  });
+  return positions;
+}
+
+function startAdvancing() {
+  stopAdvancing();
+  currentLineIdx     = 0;
+  currentSentenceIdx = -1; // force first setActiveLine(0) to always activate paragraph
+  requestAnimationFrame(() => {
+    linePositions = buildLinePositions();
+    setActiveLine(0);
+    resumeAdvancing();
+  });
+}
+
+function resumeAdvancing() {
+  advanceTimer = setInterval(() => {
+    if (currentLineIdx >= linePositions.length - 1) { stopAdvancing(); return; }
+    currentLineIdx++;
+    setActiveLine(currentLineIdx);
+  }, Math.round(progInterval / speedMultiplier));
+}
+
+function stopAdvancing() {
+  if (advanceTimer) { clearInterval(advanceTimer); advanceTimer = null; }
+}
+
+function setActiveLine(lineIdx) {
+  if (!linePositions[lineIdx]) return;
+  let { top, sentenceIdx } = linePositions[lineIdx];
+
+  readingStripeEl.style.top = top + 'px';
+
+  if (sentenceIdx !== currentSentenceIdx) {
+    currentSentenceIdx = sentenceIdx;
+    let spans = readerTextEl.querySelectorAll('.sentence');
+    spans.forEach(s => s.classList.remove('active'));
+    readerTextEl.querySelectorAll('p.active-para').forEach(p => p.classList.remove('active-para'));
+    if (spans[sentenceIdx]) {
+      spans[sentenceIdx].classList.add('active');
+      spans[sentenceIdx].parentElement.classList.add('active-para');
+      spans[sentenceIdx].scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }
+}
+
+function setSpeed(mult) {
+  speedMultiplier = mult;
+  document.querySelectorAll('.speed-btn').forEach(b => {
+    b.classList.toggle('active', parseFloat(b.dataset.speed) === mult);
+  });
+  if (advanceTimer) { stopAdvancing(); resumeAdvancing(); }
 }
 
 
@@ -443,6 +578,26 @@ INTENSITY: 0.3 (quiet, subtle scene) to 1.0 (overwhelming, climactic)`
   return atmosphere;
 }
 
+async function triggerAtmosphereAnalysis(idx) {
+  if (isAnalyzing) return;
+  isAnalyzing = true;
+  let btn = document.getElementById('analyze-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+  try {
+    let spans      = readerTextEl.querySelectorAll('.sentence');
+    let start      = Math.max(0, idx - 2);
+    let chunkText  = Array.from(spans).slice(start, start + 6).map(s => s.textContent.trim()).join(' ');
+    let atmosphere = await analyzeAtmosphere(chunkText);
+    playAtmosphere(atmosphere);
+  } catch (e) {
+    console.error('Atmosphere analysis failed:', e);
+    setAtmosphereStatus('Analysis failed');
+  } finally {
+    isAnalyzing = false;
+    if (btn) { btn.disabled = false; btn.textContent = 'Analyze Mood'; }
+  }
+}
+
 
 // =====================================================
 //   AUDIO
@@ -482,7 +637,7 @@ function findTextureFile(textureName) {
 
 function playAtmosphere(atmosphere) {
   setAtmosphereStatus('Loading atmosphere...');
-  stopAllAudio();
+  fadeOutCurrentAudio();
 
   let mood      = atmosphere.mood;
   let setting   = atmosphere.setting;
@@ -496,16 +651,23 @@ function playAtmosphere(atmosphere) {
   // Base mood track
   let baseFile = findBaseFile(mood, variant);
   if (baseFile) {
-    currentBase = new Howl({
-      src: [`assets/audio/base/${baseFile}`],
-      loop: true,
+    let companion = BASE_COMPANIONS[baseFile];
+    let howl = new Howl({
+      src:    [`assets/audio/base/${baseFile}`],
+      loop:   companion ? false : true,
       volume: baseVolume
     });
-    currentBase.once('load', () => {
-      let randomStart = Math.random() * Math.max(0, currentBase.duration() - 5);
-      currentBase.seek(randomStart);
+    currentBase = howl;
+    howl.once('load', () => {
+      let randomStart = Math.random() * Math.max(0, howl.duration() - 5);
+      howl.seek(randomStart);
+      if (companion) {
+        howl.once('end', () => {
+          if (currentBase === howl) crossfadeBase(companion, baseVolume);
+        });
+      }
     });
-    currentBase.play();
+    howl.play();
     console.log('Playing base:', baseFile, 'volume:', baseVolume);
   }
 
@@ -528,14 +690,46 @@ function playAtmosphere(atmosphere) {
 
   let settingLabel = (setting && setting !== 'none') ? ` · ${setting}` : '';
   setAtmosphereStatus(`${mood}${settingLabel}`);
+  updateMoodDisplay(mood, setting !== 'none' ? setting : null);
 }
 
-function stopAllAudio() {
+function crossfadeBase(nextFile, targetVol) {
+  let oldBase  = currentBase;
+  let nextHowl = new Howl({
+    src:    [`assets/audio/base/${nextFile}`],
+    loop:   BASE_COMPANIONS[nextFile] ? false : true,
+    volume: 0
+  });
+  currentBase = nextHowl;
+
+  nextHowl.once('load', () => {
+    if (currentBase !== nextHowl) return; // stale — a newer load took over
+    nextHowl.fade(0, targetVol, 2000);
+    if (oldBase) {
+      oldBase.fade(oldBase.volume(), 0, 2000);
+      setTimeout(() => oldBase.stop(), 2020);
+    }
+    let companion = BASE_COMPANIONS[nextFile];
+    if (companion) {
+      nextHowl.once('end', () => {
+        if (currentBase === nextHowl) crossfadeBase(companion, targetVol);
+      });
+    }
+  });
+  nextHowl.play();
+}
+
+function fadeOutCurrentAudio() {
   let toStop = [];
   if (currentBase) { toStop.push(currentBase); currentBase = null; }
   currentTextures.forEach(t => toStop.push(t));
   currentTextures = [];
   toStop.forEach(h => { h.fade(h.volume(), 0, 2000); setTimeout(() => h.stop(), 2020); });
+}
+
+function stopAllAudio() {
+  stopAdvancing();
+  fadeOutCurrentAudio();
   isPaused = false;
   document.getElementById('pause-btn').textContent = 'Pause';
 }
@@ -545,9 +739,11 @@ function togglePause() {
   if (isPaused) {
     if (currentBase) currentBase.pause();
     currentTextures.forEach(t => t.pause());
+    stopAdvancing();
   } else {
     if (currentBase) currentBase.play();
     currentTextures.forEach(t => t.play());
+    resumeAdvancing();
   }
   document.getElementById('pause-btn').textContent = isPaused ? 'Resume' : 'Pause';
 }
@@ -580,6 +776,18 @@ function moodToColor(mood) {
     'whimsical':     '#d25cf6'   // violet/purple
   };
   return colorMap[mood] || '#888888';
+}
+
+function fileBaseName(filename) {
+  let m = filename.match(/^([A-Z][a-z]+)/);
+  return m ? m[1].toLowerCase() : filename.replace(/\d+\.mp3$/i, '').toLowerCase();
+}
+
+function updateMoodDisplay(mood, setting) {
+  if (!moodDisplayEl) return;
+  let hex         = moodToColor(mood);
+  let settingLine = setting ? `<span class="mood-setting">${setting}</span>` : '';
+  moodDisplayEl.innerHTML = `<span class="mood-dot" style="background:${hex}"></span>${mood}${settingLine}`;
 }
 
 function applyMoodTint(hexColor, intensity) {
