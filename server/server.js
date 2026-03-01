@@ -1,8 +1,3 @@
-cd server
-npm init -y
-npm i ws
-node server.js
-
 // server/server.js
 import { WebSocketServer } from "ws";
 
