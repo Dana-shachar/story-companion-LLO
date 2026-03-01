@@ -19,6 +19,7 @@ let isAnalyzing        = false;
 let port, writer, reader;
 let encoder        = new TextEncoder();
 let arduinoConnected = false;
+let serialMsgId    = 0;
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
 let currentBase     = null;
@@ -880,10 +881,10 @@ function hexToRgba(hex, alpha) {
 }
 
 function moodToRgbScaled(hex, intensity) {
-  let r = Math.round(parseInt(hex.slice(1, 3), 16) * intensity);
-  let g = Math.round(parseInt(hex.slice(3, 5), 16) * intensity);
-  let b = Math.round(parseInt(hex.slice(5, 7), 16) * intensity);
-  return `${r},${g},${b}`;
+  let r = Math.round(parseInt(hex.slice(1, 3), 16));
+  let g = Math.round(parseInt(hex.slice(3, 5), 16));
+  let b = Math.round(parseInt(hex.slice(5, 7), 16));
+  return JSON.stringify({ cmd: 'set_rgb', r, g, b, intensity: parseFloat(intensity.toFixed(3)), duration_ms: 0, msg_id: ++serialMsgId });
 }
 
 
