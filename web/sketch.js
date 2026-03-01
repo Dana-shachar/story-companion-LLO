@@ -806,8 +806,12 @@ function hexToRgba(hex, alpha) {
 // =====================================================
 //   WEB SERIAL CONNECTION
 // =====================================================
-
 async function connectSerial() {
+  if (port && port.readable) {
+    console.log("Already connected.");
+    return;
+  }
+
   try {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
@@ -815,33 +819,91 @@ async function connectSerial() {
 
     readFromArduino();
 
-    arduinoConnected           = true;
-    connectButton.disabled     = true;
-    connectButton.textContent  = 'Device Connected';
+    arduinoConnected          = true;
+    connectButton.disabled    = true;
+    connectButton.textContent = 'Device Connected';
     console.log('Arduino connected!');
 
   } catch (err) {
+    if (err && err.name === "NotFoundError") {
+      console.log("User canceled port selection.");
+      return;
+    }
     console.error('Serial connection failed:', err);
     setLoadStatus('Connection failed');
   }
 }
 
 async function readFromArduino() {
-  const textDecoder        = new TextDecoderStream();
+  // Read UTF-8 text from the serial port, accumulate, and split by newline.
+  // ESP32 should send one JSON object per line (ending with \n).
+  const textDecoder = new TextDecoderStream();
   const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
   reader = textDecoder.readable.getReader();
+
+  let rxBuffer = '';
 
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) { reader.releaseLock(); break; }
-      console.log('Arduino says:', value);
-      if (value.includes('BUTTON_PRESSED')) openBook();
+      if (done) {
+        reader.releaseLock();
+        break;
+      }
+      if (!value) continue;
+
+      rxBuffer += value;
+
+      // Split into complete lines; keep the trailing partial line in rxBuffer
+      const lines = rxBuffer.split(/\r?\n/);
+      rxBuffer = lines.pop() || '';
+
+      for (let line of lines) {
+        line = line.trim();
+        if (!line) continue;
+
+        console.log('Arduino says:', line);
+
+        // Backward compatibility: plain text events
+        if (!line.startsWith('{')) {
+          if (line.includes('BUTTON_PRESSED')) {
+            // Button is a fallback for touch → same trigger as touch
+            triggerAtmosphereAnalysis(currentSentenceIdx);
+          }
+          continue;
+        }
+
+        try {
+          const msg = JSON.parse(line);
+
+          // Keep source for debugging, but treat button/touch the same
+          if (msg.event === 'resonance_request') {
+            console.log("🟢 resonance_request received");
+            console.log("source =", msg.source);
+            console.log("currentSentenceIdx =", currentSentenceIdx);
+
+            if (typeof triggerAtmosphereAnalysis === "function") {
+              console.log("🔥 Calling triggerAtmosphereAnalysis...");
+              triggerAtmosphereAnalysis(currentSentenceIdx);
+            } else {
+              console.error("❌ triggerAtmosphereAnalysis is NOT defined");
+            }
+          }
+
+          // Optional: ACK / HELLO logs from ESP32
+          if (msg.event === 'ack') console.log('[ACK]', msg);
+          if (msg.event === 'hello') console.log('[HELLO]', msg);
+
+        } catch (e) {
+          console.warn('Failed to parse JSON from Arduino:', line, e);
+        }
+      }
     }
   } catch (error) {
     console.error('Read error:', error);
   }
 }
+
 
 async function sendToArduino(data) {
   if (writer) {
@@ -849,7 +911,11 @@ async function sendToArduino(data) {
       await writer.write(encoder.encode(data + '\n'));
       console.log('Sent to Arduino:', data);
     } catch (err) {
-      console.error('Write error:', err);
-    }
+  if (err && err.name === "NotFoundError") {
+    console.log("User canceled port selection.");
+    return;
+  }
+  console.error("Serial connection failed:", err);
+}
   }
 }
