@@ -23,9 +23,6 @@
       'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
   </script>
 
-  <!-- API config (lives in project root, one level up from web/) -->
-  <script src="../config.js"></script>
-
   <!-- sketch -->
   <script src="sketch.js"></script>
 </head>
@@ -34,7 +31,11 @@
 
   <!-- ── SCENE PANEL (demo) ───────────────────────── -->
   <div id="scene-panel">
-    <button id="analyze-btn">Analyze Mood</button>
+    <button id="random-scene-btn">Random Scene</button>
+    <div id="analyze-group">
+      <button id="analyze-btn">Analyze Mood</button>
+      <div id="analyze-status"></div>
+    </div>
     <div id="sound-controls">
       <div id="playback-controls">
         <button id="pause-btn">Pause</button>
@@ -60,16 +61,15 @@
       <button class="scene-btn">Lord of the Rings · The Battle</button>
       <button class="scene-btn">Pride &amp; Prejudice · Darcy's Proposal</button>
       <button class="scene-btn">The Handmaid's Tale · The Wall</button>
-      <button id="random-scene-btn">Random Scene</button>
       <div id="mood-display"></div>
     </div>
   </div>
 
   <!-- ── LOAD SCREEN ────────────────────────────── -->
   <div id="load-screen">
-    <button id="load-button">Open a Book</button>
-    <div id="load-status"></div>
     <button id="connect-button">Connect Device</button>
+    <div id="load-status"></div>
+    <button id="load-button">Use Without Device</button>
   </div>
 
   <!-- ── READER ─────────────────────────────────── -->

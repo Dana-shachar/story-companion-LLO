@@ -2,7 +2,7 @@
 let loadScreenEl, readerEl;
 let loadButton, loadStatusEl, connectButton;
 let bookTitleEl, readingProgressEl, progressFillEl;
-let readerTextEl, readingStripeEl, atmosphereStatusEl, moodDisplayEl;
+let readerTextEl, readingStripeEl, atmosphereStatusEl, moodDisplayEl, analyzeStatusEl;
 
 // ── Reader state ──────────────────────────────────────────────────────────────
 let allSentences       = [];
@@ -105,8 +105,11 @@ function setup() {
   readingStripeEl    = document.getElementById('reading-stripe');
   atmosphereStatusEl = document.getElementById('atmosphere-status');
   moodDisplayEl      = document.getElementById('mood-display');
+  analyzeStatusEl    = document.getElementById('analyze-status');
 
-  loadButton.addEventListener('click', openBook);
+  loadButton.addEventListener('click', () => {
+    loadScreenEl.style.display = 'none';
+  });
   connectButton.addEventListener('click', connectSerial);
 
   document.getElementById('pause-btn').addEventListener('click', togglePause);
@@ -124,9 +127,7 @@ function setup() {
     btn.addEventListener('click', () => loadCuratedScene(idx));
   });
 
-  document.getElementById('random-scene-btn').addEventListener('click', () => {
-    loadCuratedScene(Math.floor(Math.random() * CURATED_SCENES.length));
-  });
+  document.getElementById('random-scene-btn').addEventListener('click', openBook);
 }
 
 function draw() {
@@ -178,6 +179,7 @@ async function openBook() {
 
     // Position stripe on first sentence after layout settles
     startAdvancing();
+    triggerAtmosphereAnalysis(0);
 
   } catch (error) {
     console.error(error);
@@ -270,6 +272,7 @@ function playCuratedAudio(scene) {
   }
 
   applyMoodTint(moodToColor(scene.mood), scene.intensity);
+  sendToArduino(moodToRgbScaled(moodToColor(scene.mood), scene.intensity));
   let label = scene.textureFile ? ` · ${scene.textureFile.replace(/\d+\.mp3$/i, '').toLowerCase()}` : '';
   setAtmosphereStatus(`${scene.mood}${label}`);
   updateMoodDisplay(scene.mood, scene.textureFile ? fileBaseName(scene.textureFile) : null);
@@ -514,55 +517,124 @@ function setAtmosphereStatus(message) {
 async function analyzeAtmosphere(passage) {
   setAtmosphereStatus('Analyzing...');
 
-  let response = await fetch(API_ENDPOINT, {
+  let response = await fetch('/api/openai/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${API_KEY}`
     },
     body: JSON.stringify({
-      model: 'gpt-5-mini',
+      model: 'gpt-4o-mini',
       messages: [
         {
           role: 'system',
-          content: `Analyze this passage and return JSON with the emotional mood, physical setting, and intensity.
+          content: `You are a music supervisor for an AI-powered e-reader. Analyze literary passages and select the best background music from the available tracks below.
 
 Return ONLY valid JSON (no markdown, no code blocks):
 {
-  "mood": "one of the moods below",
-  "setting": "one of the settings below",
+  "baseTrack": "<filename from BASE TRACKS>",
+  "textureTrack": "<filename from TEXTURE TRACKS, or null>",
+  "mood": "<one of the mood labels>",
   "intensity": 0.7
 }
 
-MOOD OPTIONS (read definitions carefully):
-- contemplative: Thoughtful, reflective, pondering. Character thinking about life, destiny, or choices. May include longing or wonder, but NOT sadness. Peaceful internal thought.
-- cozy: Warm, comfortable, safe. A quiet moment at home or outdoors. Early morning, a familiar place, a character at peace.
-- enchanted: Magical, wondrous. A sense of discovery, awe, or gentle magic. Mysterious woods, spells, fairy-tale wonder.
-- epic: Grand, sweeping, heroic. A great journey, battle, or moment of high adventure.
-- joyful: Happy, celebratory, lighthearted. Laughter, excitement, delight.
-- melancholy: ACTUALLY SAD — grief, loss, heartbreak, sorrow. Must involve genuine sadness or pain. IMPORTANT: if a character is pondering but not sad → use contemplative, not melancholy.
-- mysterious: Curious or eerie. Something unknown, hidden, or unexplained. A magical or unsettling vibe without clear danger.
-- peaceful: Calm, still, serene. Nature at rest, a quiet moment, no tension or conflict.
-- ominous: Subtle dread. A character sensing something bad is coming. Psychological, not action-based. Not the same as scary — ominous is the feeling before something happens.
-- romantic: Love, longing, tenderness, attraction between characters.
-- scary: Active danger or fear. Horror, a threat looming, a character in genuine danger or terror.
-- suspense: Tension and uncertainty. Something is about to happen but it's unclear what. Apprehension, right before action.
+MOOD LABELS (for display only — pick the closest):
+contemplative, cozy, enchanted, epic, joyful, melancholy, mysterious, peaceful, ominous, romantic, scary, suspense, whimsical
 
-SETTING OPTIONS:
-- forest: Woodland, trees, nature, outdoor greenery
-- storm: Rain, thunder, dark weather, rough sea
-- hearth: Indoors by fire, warm domestic space, candlelight
-- citynight: Urban streets, nighttime city, lamplit alleys
-- none: No clear physical setting, or setting doesn't fit the options above
+INTENSITY: 0.3 (quiet, subtle) to 1.0 (overwhelming, climactic)
 
-INTENSITY: 0.3 (quiet, subtle scene) to 1.0 (overwhelming, climactic)`
+═══ BASE TRACKS ═══
+
+CONTEMPLATIVE:
+- Contemplative.mp3 — solo piano, quiet inner thought, philosophical reflection
+
+COZY / PEACEFUL (all mellow, low tempo — very similar in feel, nearly interchangeable):
+- Cozy01.mp3 — warm acoustic, domestic comfort
+- Cozy02.mp3 — similar to Cozy01
+- Peaceful01.mp3 — gentle, calm, nature at rest
+
+ENCHANTED / HOPEFUL:
+- EnchantedAdventure01.mp3 — magical orchestral, wonder and discovery; can also read as hopeful or optimistic
+- HopefulStrings01.mp3 — hopeful strings, rising emotion
+- HopefulStrings02.mp3 — similar hopeful character
+- HopefulStrings03.mp3 — hopeful strings with a romantic warmth; used for Darcy's Proposal
+
+EPIC (Epic01 and Epic02 are similar, interchangeable):
+- Epic01.mp3 — full orchestra, heroic and sweeping
+- Epic02.mp3 — similar to Epic01
+
+EMOTIONAL / BITTERSWEET:
+- Emotional01.mp3 — moving orchestral, bittersweet and tender; used for Mirror of Erised (longing + warmth, NOT pure sadness or grief)
+
+JOYFUL / FESTIVE (PartyCeltic01 and 02 are similar, interchangeable):
+- PartyCeltic01.mp3 — Celtic folk, festive celebration, lively
+- PartyCeltic02.mp3 — similar to PartyCeltic01
+
+MELANCHOLY:
+- Melancholy01.mp3 — strings and piano, genuine grief and loss
+- Melancholy02.mp3 — similar to Melancholy01
+- Melancholy03.mp3 — sad but touching, more emotionally resonant than 01/02
+
+MYSTERIOUS:
+- Mysterious01.mp3 — Harry Potter-style magical mystery; eerie discovery of the unknown, not threatening
+- Scary01.mp3 — despite the name, actually sounds mysterious rather than scary; use for mysterious passages, NOT horror
+
+OMINOUS:
+- Ominous01.mp3 — pure ambient atmosphere, no melody; use ONLY if no other base track fits
+- Ominous02.mp3 — dark, threatening dread; similar feel to ScaryHorror02
+- Ominous03.mp3 — oppressive, mournful; used for The Handmaid's Tale (systemic/political dread, not monster-fear)
+
+ROMANTIC:
+- RomanticPiano01.mp3 — quiet, sweet, intimate; SHORT track — best for brief, tender, private moments
+- RomanticViolin01.mp3 — soaring violin, 19th-century ballroom waltz character
+- RomanticQuartet.mp3 — string quartet; similar 19th-century waltz to RomanticViolin01
+
+SCARY / HORROR:
+- ScaryHorror02.mp3 — Jaws-like suspenseful dread, atmospheric; similar feel to Ominous02
+- ScaryStrings01.mp3 — chaotic, frantic strings with a mad/unhinged edge; used for Alice's Queen of Hearts (madness and chaos, NOT pure terror)
+- ScaryStrings02.mp3 — gothic dark orchestral; classic monster-story horror; used for Frankenstein's Creature
+
+SUSPENSE (⚠ very different tempos — do NOT use interchangeably):
+- Suspense01.mp3 — SLOW, dark, heavy, brooding dread
+- Suspense02.mp3 — HIGH TEMPO, urgent, racing tension; used for Forbidden Forest (lurking danger, something close)
+
+WHIMSICAL:
+- Whimsical01.mp3 — chaotic, frantic whimsy, used for Down the Rabbit Hole
+- Whimsical02.mp3 — light and playful, used for Tea Party
+
+═══ TEXTURE TRACKS (ambient layer — use null if no clear setting) ═══
+- Battle01.mp3 / Battle02.mp3 — clashing swords, battle chaos
+- Castle01.mp3 — grand stone hall, reverberant
+- CityNight01.mp3 — urban nighttime ambient
+- Forest01.mp3 — birdsong, rustling leaves, outdoor woodland
+- Garden01.mp3 — gentle garden ambience
+- Hearth01.mp3 — fireplace crackling, warm indoors
+- Rain01.mp3 — soft rainfall
+- ScaryWindTexture.mp3 — ominous moaning wind (pair with ominous/scary bases)
+- Storm01.mp3 — thunder and rain, outdoor storm
+- StormInterior01.mp3 — storm heard from inside a building
+- Tavern01.mp3 — tavern chatter and noise
+- TavernLow01.mp3 — quieter tavern background
+
+═══ CURATED EXAMPLES ═══
+Alice: Down the Rabbit Hole → { "baseTrack": "Whimsical01.mp3", "textureTrack": "Forest01.mp3", "mood": "whimsical", "intensity": 0.7 }
+Alice: Queen of Hearts → { "baseTrack": "ScaryStrings01.mp3", "textureTrack": "Garden01.mp3", "mood": "scary", "intensity": 0.8 }
+Alice: Tea Party → { "baseTrack": "Whimsical02.mp3", "textureTrack": "Garden01.mp3", "mood": "whimsical", "intensity": 0.7 }
+Frankenstein: Creature Awakens → { "baseTrack": "ScaryStrings02.mp3", "textureTrack": "Storm01.mp3", "mood": "scary", "intensity": 0.9 }
+Harry Potter: Mirror of Erised → { "baseTrack": "Emotional01.mp3", "textureTrack": "Hearth01.mp3", "mood": "melancholy", "intensity": 0.75 }
+Harry Potter: You're a Wizard → { "baseTrack": "Mysterious01.mp3", "textureTrack": "StormInterior01.mp3", "mood": "mysterious", "intensity": 0.8 }
+Harry Potter: Forbidden Forest → { "baseTrack": "Suspense02.mp3", "textureTrack": "Forest01.mp3", "mood": "scary", "intensity": 0.85 }
+LOTR: Bilbo's Party → { "baseTrack": "PartyCeltic01.mp3", "textureTrack": "Tavern01.mp3", "mood": "joyful", "intensity": 0.8 }
+LOTR: The Battle → { "baseTrack": "Epic01.mp3", "textureTrack": "Battle01.mp3", "mood": "epic", "intensity": 0.9 }
+Pride & Prejudice: Darcy's Proposal → { "baseTrack": "HopefulStrings03.mp3", "textureTrack": "Garden01.mp3", "mood": "romantic", "intensity": 0.75 }
+Handmaid's Tale: The Wall → { "baseTrack": "Ominous03.mp3", "textureTrack": "CityNight01.mp3", "mood": "ominous", "intensity": 0.8 }`
         },
         {
           role: 'user',
           content: `Analyze this passage:\n\n${passage}`
         }
       ],
-      max_tokens: 100,
+      max_tokens: 150,
       temperature: 0.3
     })
   });
@@ -583,15 +655,25 @@ async function triggerAtmosphereAnalysis(idx) {
   isAnalyzing = true;
   let btn = document.getElementById('analyze-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Analyzing...'; }
+  if (analyzeStatusEl) { analyzeStatusEl.style.color = '#666'; analyzeStatusEl.textContent = ''; }
   try {
     let spans      = readerTextEl.querySelectorAll('.sentence');
     let start      = Math.max(0, idx - 2);
     let chunkText  = Array.from(spans).slice(start, start + 6).map(s => s.textContent.trim()).join(' ');
     let atmosphere = await analyzeAtmosphere(chunkText);
     playAtmosphere(atmosphere);
+    if (analyzeStatusEl) {
+      let label = atmosphere.textureTrack ? ` · ${fileBaseName(atmosphere.textureTrack)}` : '';
+      analyzeStatusEl.style.color = '#666';
+      analyzeStatusEl.textContent = `✓ ${atmosphere.mood}${label}`;
+    }
   } catch (e) {
     console.error('Atmosphere analysis failed:', e);
     setAtmosphereStatus('Analysis failed');
+    if (analyzeStatusEl) {
+      analyzeStatusEl.style.color = '#884444';
+      analyzeStatusEl.textContent = 'Analysis failed — check console';
+    }
   } finally {
     isAnalyzing = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Analyze Mood'; }
@@ -603,94 +685,89 @@ async function triggerAtmosphereAnalysis(idx) {
 //   AUDIO
 // =====================================================
 
-function findBaseFile(mood, variant) {
-  const baseMap = {
-    'contemplative': 'Contemplative.mp3',
-    'cozy':          variant === 2 ? 'Cozy02.mp3'       : 'Cozy01.mp3',
-    'enchanted':     'Enchanted01.mp3',
-    'epic':          variant === 2 ? 'Epic02.mp3'       : 'Epic01.mp3',
-    'joyful':        'JoyfulGentle01.mp3',
-    'melancholy':    variant === 2 ? 'Melancholy02.mp3' : 'Melancholy01.mp3',
-    'mysterious':    'Mysterious01.mp3',
-    'peaceful':      'Peaceful01.mp3',
-    'ominous':       'Ominous01.mp3',
-    'romantic':      'Romantic01.mp3',
-    'scary':         'Scary01.mp3',
-    'suspense':      'Suspense01.mp3'
-  };
-  let file = baseMap[mood.toLowerCase()];
-  if (!file) { console.error('No base file for mood:', mood); return null; }
-  return file;
-}
+const VALID_BASE_TRACKS = new Set([
+  'Contemplative.mp3',
+  'Cozy01.mp3', 'Cozy02.mp3',
+  'Emotional01.mp3',
+  'EnchantedAdventure01.mp3',
+  'Epic01.mp3', 'Epic02.mp3',
+  'HopefulStrings01.mp3', 'HopefulStrings02.mp3', 'HopefulStrings03.mp3',
+  'Melancholy01.mp3', 'Melancholy02.mp3', 'Melancholy03.mp3',
+  'Mysterious01.mp3',
+  'Ominous01.mp3', 'Ominous02.mp3', 'Ominous03.mp3',
+  'PartyCeltic01.mp3', 'PartyCeltic02.mp3',
+  'Peaceful01.mp3',
+  'RomanticPiano01.mp3', 'RomanticQuartet.mp3', 'RomanticViolin01.mp3',
+  'Scary01.mp3', 'ScaryHorror02.mp3', 'ScaryStrings01.mp3', 'ScaryStrings02.mp3',
+  'Suspense01.mp3', 'Suspense02.mp3',
+  'Whimsical01.mp3', 'Whimsical02.mp3',
+]);
 
-function findTextureFile(textureName) {
-  const textureMap = {
-    'forest':    'Forest01.mp3',
-    'storm':     'Storm01.mp3',
-    'hearth':    'Hearth01.mp3',
-    'citynight': 'CityNight01.mp3'
-  };
-  let file = textureMap[textureName.toLowerCase()];
-  if (!file) { console.error('No texture file for:', textureName); return null; }
-  return file;
-}
+const VALID_TEXTURE_TRACKS = new Set([
+  'Battle01.mp3', 'Battle02.mp3',
+  'Castle01.mp3', 'CityNight01.mp3',
+  'Forest01.mp3', 'Garden01.mp3', 'Hearth01.mp3',
+  'Rain01.mp3', 'ScaryWindTexture.mp3',
+  'Storm01.mp3', 'StormInterior01.mp3',
+  'Tavern01.mp3', 'TavernLow01.mp3',
+]);
 
 function playAtmosphere(atmosphere) {
   setAtmosphereStatus('Loading atmosphere...');
   fadeOutCurrentAudio();
 
-  let mood      = atmosphere.mood;
-  let setting   = atmosphere.setting;
-  let intensity = atmosphere.intensity || 0.7;
+  let mood      = atmosphere.mood      || 'mysterious';
+  let baseFile  = atmosphere.baseTrack;
+  let texFile   = atmosphere.textureTrack || null;
+  let intensity = atmosphere.intensity  || 0.7;
 
-  // Moods with two variants — pick randomly
-  const moodsWithVariants = ['cozy', 'epic', 'melancholy'];
-  let variant    = moodsWithVariants.includes(mood) ? (Math.random() < 0.5 ? 1 : 2) : 1;
-  let baseVolume = 0.4 + (intensity * 0.5);
-
-  // Base mood track
-  let baseFile = findBaseFile(mood, variant);
-  if (baseFile) {
-    let companion = BASE_COMPANIONS[baseFile];
-    let howl = new Howl({
-      src:    [`assets/audio/base/${baseFile}`],
-      loop:   companion ? false : true,
-      volume: baseVolume
-    });
-    currentBase = howl;
-    howl.once('load', () => {
-      let randomStart = Math.random() * Math.max(0, howl.duration() - 5);
-      howl.seek(randomStart);
-      if (companion) {
-        howl.once('end', () => {
-          if (currentBase === howl) crossfadeBase(companion, baseVolume);
-        });
-      }
-    });
-    howl.play();
-    console.log('Playing base:', baseFile, 'volume:', baseVolume);
+  if (!VALID_BASE_TRACKS.has(baseFile)) {
+    console.warn('Invalid baseTrack from AI:', baseFile);
+    setAtmosphereStatus('Analysis error');
+    return;
+  }
+  if (texFile && !VALID_TEXTURE_TRACKS.has(texFile)) {
+    console.warn('Invalid textureTrack from AI:', texFile, '— ignoring');
+    texFile = null;
   }
 
-  // Setting texture layer
-  if (setting && setting !== 'none') {
-    let textureFile = findTextureFile(setting);
-    if (textureFile) {
-      let texture = new Howl({
-        src: [`assets/audio/textures/${textureFile}`],
-        loop: true,
-        volume: 0.4
+  let baseVolume = 0.4 + (intensity * 0.5);
+  let companion  = BASE_COMPANIONS[baseFile];
+
+  let howl = new Howl({
+    src:    [`assets/audio/base/${baseFile}`],
+    loop:   companion ? false : true,
+    volume: baseVolume
+  });
+  currentBase = howl;
+  howl.once('load', () => {
+    let randomStart = Math.random() * Math.max(0, howl.duration() - 5);
+    howl.seek(randomStart);
+    if (companion) {
+      howl.once('end', () => {
+        if (currentBase === howl) crossfadeBase(companion, baseVolume);
       });
-      texture.play();
-      currentTextures.push(texture);
-      console.log('Playing texture:', textureFile);
     }
+  });
+  howl.play();
+  console.log('Playing base:', baseFile, 'volume:', baseVolume);
+
+  if (texFile) {
+    let texture = new Howl({
+      src:    [`assets/audio/textures/${texFile}`],
+      loop:   true,
+      volume: 0.4
+    });
+    texture.play();
+    currentTextures.push(texture);
+    console.log('Playing texture:', texFile);
   }
 
   applyMoodTint(moodToColor(mood), intensity);
-
-  let settingLabel = (setting && setting !== 'none') ? ` · ${setting}` : '';
+  sendToArduino(moodToRgbScaled(moodToColor(mood), intensity));
+  let settingLabel = texFile ? ` · ${fileBaseName(texFile)}` : '';
   setAtmosphereStatus(`${mood}${settingLabel}`);
-  updateMoodDisplay(mood, setting !== 'none' ? setting : null);
+  updateMoodDisplay(mood, texFile ? fileBaseName(texFile) : null);
 }
 
 function crossfadeBase(nextFile, targetVol) {
@@ -802,6 +879,13 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+function moodToRgbScaled(hex, intensity) {
+  let r = Math.round(parseInt(hex.slice(1, 3), 16) * intensity);
+  let g = Math.round(parseInt(hex.slice(3, 5), 16) * intensity);
+  let b = Math.round(parseInt(hex.slice(5, 7), 16) * intensity);
+  return `${r},${g},${b}`;
+}
+
 
 // =====================================================
 //   WEB SERIAL CONNECTION
@@ -818,6 +902,7 @@ async function connectSerial() {
     arduinoConnected           = true;
     connectButton.disabled     = true;
     connectButton.textContent  = 'Device Connected';
+    loadScreenEl.style.display = 'none';
     console.log('Arduino connected!');
 
   } catch (err) {

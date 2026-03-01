@@ -22,8 +22,14 @@ body {
   left: 1.5rem;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
   z-index: 100;
+}
+
+#analyze-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 #analyze-btn {
@@ -43,6 +49,14 @@ body {
 
 #analyze-btn:hover    { filter: brightness(0.85); }
 #analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
+
+#analyze-status {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.7rem;
+  color: #666;
+  letter-spacing: 0.04em;
+  min-height: 2.4em;
+}
 
 #sound-controls {
   display: flex;
@@ -177,10 +191,9 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
 }
 
-#load-button {
+#connect-button {
   padding: 14px 48px;
   font-size: 16px;
   font-family: 'Literata', 'Georgia', serif;
@@ -190,11 +203,12 @@ body {
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  transition: opacity 0.2s;
+  width: 100%;
+  transition: filter 0.2s;
 }
 
-#load-button:hover    { opacity: 0.85; }
-#load-button:disabled { opacity: 0.5; cursor: not-allowed; }
+#connect-button:hover    { filter: brightness(0.85); }
+#connect-button:disabled { opacity: 0.5; cursor: not-allowed; filter: none; }
 
 #load-status {
   font-size: 13px;
@@ -204,20 +218,22 @@ body {
   text-align: center;
 }
 
-#connect-button {
-  padding: 10px 24px;
-  font-size: 13px;
-  font-family: 'Inter', sans-serif;
-  background: transparent;
-  color: #666;
-  border: 1px solid #444;
+#load-button {
+  padding: 14px 48px;
+  font-size: 16px;
+  font-family: 'Literata', 'Georgia', serif;
+  letter-spacing: 0.04em;
+  background: #2A2A2A;
+  color: #EDE7DC;
+  border: 1px solid #3A3A3A;
   border-radius: 4px;
   cursor: pointer;
-  transition: color 0.2s, border-color 0.2s;
+  width: 100%;
+  transition: background 0.2s;
 }
 
-#connect-button:hover    { color: #999; border-color: #666; }
-#connect-button:disabled { opacity: 0.5; cursor: default; }
+#load-button:hover    { background: #3A3A3A; }
+#load-button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* =====================================================
    READER
