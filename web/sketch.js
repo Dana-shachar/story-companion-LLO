@@ -20,6 +20,9 @@ let port, writer, reader;
 let encoder        = new TextEncoder();
 let arduinoConnected = false;
 let serialMsgId    = 0;
+let pcLedGateEnabled = false; // reported by ESP32 (pc_led_gate)
+let lastLedPayload   = null;  // last LED command sent to ESP32 (string)
+let lastGateEnabled  = false; // for edge-detecting gate ON
 
 // ── Audio ─────────────────────────────────────────────────────────────────────
 let currentBase     = null;
@@ -114,7 +117,7 @@ function setup() {
   connectButton.addEventListener('click', connectSerial);
 
   document.getElementById('pause-btn').addEventListener('click', togglePause);
-  document.getElementById('mute-btn').addEventListener('click', toggleMute);
+  document.getElementById('mute-btn').addEventListener('click', () => setMuted(!isMuted));
 
   document.getElementById('analyze-btn').addEventListener('click', () => {
     triggerAtmosphereAnalysis(currentSentenceIdx);
@@ -273,7 +276,7 @@ function playCuratedAudio(scene) {
   }
 
   applyMoodTint(moodToColor(scene.mood), scene.intensity);
-  sendToArduino(moodToRgbScaled(moodToColor(scene.mood), scene.intensity));
+  sendLedToArduino(moodToRgbScaled(moodToColor(scene.mood), scene.intensity));
   let label = scene.textureFile ? ` · ${scene.textureFile.replace(/\d+\.mp3$/i, '').toLowerCase()}` : '';
   setAtmosphereStatus(`${scene.mood}${label}`);
   updateMoodDisplay(scene.mood, scene.textureFile ? fileBaseName(scene.textureFile) : null);
@@ -522,7 +525,7 @@ async function analyzeAtmosphere(passage) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${API_KEY}`
+      'Authorization': `Bearer ${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}`
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
@@ -765,7 +768,7 @@ function playAtmosphere(atmosphere) {
   }
 
   applyMoodTint(moodToColor(mood), intensity);
-  sendToArduino(moodToRgbScaled(moodToColor(mood), intensity));
+  sendLedToArduino(moodToRgbScaled(moodToColor(mood), intensity));
   let settingLabel = texFile ? ` · ${fileBaseName(texFile)}` : '';
   setAtmosphereStatus(`${mood}${settingLabel}`);
   updateMoodDisplay(mood, texFile ? fileBaseName(texFile) : null);
@@ -826,10 +829,15 @@ function togglePause() {
   document.getElementById('pause-btn').textContent = isPaused ? 'Resume' : 'Pause';
 }
 
-function toggleMute() {
-  isMuted = !isMuted;
+function setMuted(muted) {
+  isMuted = !!muted;
   Howler.mute(isMuted);
   document.getElementById('mute-btn').textContent = isMuted ? 'Unmute' : 'Mute';
+}
+
+// keep for backward compatibility (if any old calls exist)
+function toggleMute() {
+  setMuted(!isMuted);
 }
 
 
@@ -893,39 +901,29 @@ function moodToRgbScaled(hex, intensity) {
 // =====================================================
 
 async function connectSerial() {
-  if (port && port.readable) {
-    console.log('Already connected.');
-    return;
-  }
-
   try {
     port = await navigator.serial.requestPort();
     await port.open({ baudRate: 115200 });
-    writer = port.writable.getWriter();
 
-    readFromArduino();
+    const textEncoder = new TextEncoderStream();
+    textEncoder.readable.pipeTo(port.writable);
+    writer = textEncoder.writable.getWriter();
 
-    arduinoConnected          = true;
-    connectButton.disabled    = true;
+    readFromArduino(); // 不要 await，保持后台读
+
+    arduinoConnected = true;
+    connectButton.disabled = true;
     connectButton.textContent = 'Device Connected';
-    loadScreenEl.style.display = 'none';
     console.log('Arduino connected!');
-
   } catch (err) {
-    if (err && err.name === 'NotFoundError') {
-      console.log('User canceled port selection.');
-      return;
-    }
     console.error('Serial connection failed:', err);
-    setLoadStatus('Connection failed');
+    setLoadStatus?.('Connection failed');
   }
 }
 
 async function readFromArduino() {
-  // Read UTF-8 text from the serial port, accumulate, and split by newline.
-  // ESP32 sends one JSON object per line (ending with \n).
   const textDecoder = new TextDecoderStream();
-  const readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+  port.readable.pipeTo(textDecoder.writable);
   reader = textDecoder.readable.getReader();
 
   let rxBuffer = '';
@@ -933,12 +931,10 @@ async function readFromArduino() {
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) { reader.releaseLock(); break; }
+      if (done) break;
       if (!value) continue;
 
       rxBuffer += value;
-
-      // Split into complete lines; keep trailing partial line in buffer
       const lines = rxBuffer.split(/\r?\n/);
       rxBuffer = lines.pop() || '';
 
@@ -946,36 +942,63 @@ async function readFromArduino() {
         line = line.trim();
         if (!line) continue;
 
-        console.log('Arduino says:', line);
+        console.log('[SERIAL]', line);
 
-        // Plain text fallback
-        if (!line.startsWith('{')) {
-          if (line.includes('BUTTON_PRESSED')) triggerAtmosphereAnalysis(currentSentenceIdx);
-          continue;
-        }
+        // 如果是 JSON，就解析；否则只打印
+        if (!line.startsWith('{')) continue;
 
         try {
           const msg = JSON.parse(line);
-          if (msg.event === 'resonance_request') triggerAtmosphereAnalysis(currentSentenceIdx);
-          if (msg.event === 'ack')   console.log('[ACK]', msg);
-          if (msg.event === 'hello') console.log('[HELLO]', msg);
+
+          if (msg.event === 'pc_led_gate') {
+            // Edge-detect: only act when gate transitions OFF -> ON
+            const prev = pcLedGateEnabled;
+            pcLedGateEnabled = !!msg.enabled;
+            console.log('[GATE]', pcLedGateEnabled);
+
+            if (!prev && pcLedGateEnabled && lastLedPayload) {
+              // Re-send the most recent LED command immediately so LED can resume instantly
+              sendToArduino(lastLedPayload);
+              console.log('[GATE] re-sent last LED payload');
+            }
+          }
+
+          if (msg.event === 'mute_state') {
+            setMuted(!!msg.muted);
+            console.log('[MUTE]', !!msg.muted);
+          }
         } catch (e) {
           console.warn('Failed to parse JSON from Arduino:', line, e);
         }
       }
     }
-  } catch (error) {
-    console.error('Read error:', error);
+  } catch (e) {
+    console.error('readFromArduino error:', e);
+  } finally {
+    try { reader?.releaseLock(); } catch {}
   }
 }
 
+function setMuted(muted) {
+  isMuted = !!muted;
+  Howler.mute(isMuted);
+  const btn = document.getElementById('mute-btn');
+  if (btn) btn.textContent = isMuted ? 'Unmute' : 'Mute';
+}
+
+// Send LED command and remember it so we can re-send instantly when gate turns ON
+async function sendLedToArduino(data) {
+  // data is expected to be a JSON string like {cmd:'set_rgb',...}
+  lastLedPayload = String(data);
+  return sendToArduino(lastLedPayload);
+}
+
 async function sendToArduino(data) {
-  if (writer) {
-    try {
-      await writer.write(encoder.encode(data + '\n'));
-      console.log('Sent to Arduino:', data);
-    } catch (err) {
-      console.error('Write error:', err);
-    }
+  if (!writer) return;
+  try {
+    await writer.write(String(data) + '\n'); 
+    console.log('Sent to Arduino:', data);
+  } catch (err) {
+    console.error('Write error:', err);
   }
 }

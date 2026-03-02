@@ -4,8 +4,18 @@
 // Panel: W=32, H=8 (WESIRI 8x32 flexible WS2812B)
 // Wiring: vertical serpentine by COLUMN
 //
-// Trigger requirements:
-// - Touch OR Button both can trigger -> send event to computer via Serial
+// Behavior (updated):
+// 1) TOUCH_PIN toggles "PC LED Gate" (accept/ignore set_rgb from computer)
+// 2) LDR controls mute/unmute event to computer: dark => muted, bright => unmuted
+// 3) NO BUTTON / NO resonance_request (web handles analysis automatically)
+//
+// JSON cmd expected from PC/web:
+//   {"cmd":"set_rgb","msg_id":1,"r":0..255,"g":0..255,"b":0..255,
+//    "intensity":0..1,
+//    "pattern":0..4 (optional),
+//    "auto_cycle":true/false (optional),
+//    "duration_ms":0.. (optional, 0 = indefinite; default 0)}
+//
 // =====================================================
 
 #include "mode2_types.h"
@@ -21,21 +31,23 @@ static const uint8_t ACTIVE_Y1 = 8;   // exclusive
 // ============== Touch ==============
 #define TOUCH_PIN 4
 int TOUCH_THRESHOLD = 600;
-const uint16_t TOUCH_MIN_MS = 800;
-const uint16_t TOUCH_MAX_MS = 1200;
 
-bool gTouching = false;
-uint32_t gTouchStartMs = 0;
-bool gTouchFired = false;
+// Touch as "Gate Toggle"
+bool     gPcLedGate = false;              // false = ignore PC set_rgb, true = accept
+const uint16_t GATE_TOGGLE_HOLD_MS = 250; // hold this long to toggle (debounce)
 
-// ============== Button (NEW) ==============
-#define BTN_PIN 14
-#define BTN_ACTIVE_LOW 1        // most button modules: pressed -> LOW. If yours is opposite, set to 0.
-const uint16_t BTN_DEBOUNCE_MS = 35;
+bool     gGateTouchArmed = false;
+uint32_t gGateTouchStartMs = 0;
 
-bool gBtnStable = false;        // stable pressed state
-bool gBtnLastRead = false;      // last raw read (pressed/unpressed)
-uint32_t gBtnLastChangeMs = 0;
+// ============== LDR -> mute (NEW) ==============
+// LDR module: connect AO -> GPIO34 (default), VCC/GND accordingly.
+#define LDR_PIN 34               // ESP32 ADC input pin (34/35/36/39 recommended)
+int LDR_THRESHOLD = 1050;        // adjust based on your readings (0..4095)
+int LDR_HYST = 80;              // hysteresis to avoid flicker around threshold
+const uint16_t LDR_DEBOUNCE_MS = 200;
+
+bool     gMutedByLight = false;  // dark=true (muted), bright=false (unmuted)
+uint32_t gLdrLastFlipMs = 0;
 
 // ============== AI state ==============
 bool     gActive = false;
@@ -52,9 +64,7 @@ static String gSerialLine;
 // ============== Helpers ==============
 static inline void transportSendText(const String& s) { Serial.println(s); }
 
-static inline void clearAll() {
-  fill_solid(leds, PHYS_LEDS, CRGB::Black);
-}
+static inline void clearAll() { fill_solid(leds, PHYS_LEDS, CRGB::Black); }
 
 static inline void forceTopRowsOff() {
   for (uint8_t x = 0; x < PHYS_W; x++) {
@@ -71,7 +81,7 @@ static inline void setBrightnessFromIntensity(float intensity01) {
 
 static inline CRGB driftColor(const CRGB& base, uint32_t now) {
   CHSV hsv = rgb2hsv_approximate(base);
-  int8_t wiggle = (int8_t)(6.0f * sinf(now * 0.00025f)); // +/-6 hue
+  int8_t wiggle = (int8_t)(6.0f * sinf(now * 0.00025f));
   hsv.hue = (uint8_t)(hsv.hue + wiggle);
   uint8_t satW = (uint8_t)(10.0f * (0.5f + 0.5f * sinf(now * 0.00018f)));
   hsv.sat = qadd8(hsv.sat, satW);
@@ -230,7 +240,7 @@ void applyAI(uint8_t r, uint8_t g, uint8_t b,
   setBrightnessFromIntensity(gIntensity);
 }
 
-// ============== ACK ==============
+// ============== ACK / Events ==============
 void sendAck(int msgId, const char* status, const char* reason = "") {
   StaticJsonDocument<256> doc;
   doc["event"] = "ack";
@@ -243,18 +253,27 @@ void sendAck(int msgId, const char* status, const char* reason = "") {
   transportSendText(out);
 }
 
-// ============== Trigger Event (Touch OR Button) ==============
-void sendTriggerEvent(const char* source, uint32_t heldMsOr0) {
-  StaticJsonDocument<256> req;
-  req["event"] = "resonance_request";
-  req["mode"] = "resonance";
-  req["region"] = 2;
-  req["source"] = source;            // "touch" or "button"
-  req["duration_ms"] = heldMsOr0;
-  req["ts"] = (uint32_t)(millis() / 1000);
+// Gate state event
+void sendGateState() {
+  StaticJsonDocument<192> doc;
+  doc["event"] = "pc_led_gate";
+  doc["enabled"] = gPcLedGate;
+  doc["ts"] = (uint32_t)(millis() / 1000);
 
   String out;
-  serializeJson(req, out);
+  serializeJson(doc, out);
+  transportSendText(out);
+}
+
+// Mute state event
+void sendMuteState(bool muted) {
+  StaticJsonDocument<192> doc;
+  doc["event"] = "mute_state";
+  doc["muted"] = muted;
+  doc["ts"] = (uint32_t)(millis() / 1000);
+
+  String out;
+  serializeJson(doc, out);
   transportSendText(out);
 }
 
@@ -281,6 +300,9 @@ void handleIncomingJsonText(const String& msg) {
   }
 
   if (String(cmd) == "set_rgb") {
+    // Gate OFF => DO NOT LIGHT, but still cache the latest values so it can resume instantly.
+    bool gateOn = gPcLedGate;
+
     uint8_t r = doc["r"] | 0;
     uint8_t g = doc["g"] | 0;
     uint8_t b = doc["b"] | 0;
@@ -294,63 +316,132 @@ void handleIncomingJsonText(const String& msg) {
     int autoCycleOpt = -1;
     if (doc.containsKey("auto_cycle")) autoCycleOpt = (doc["auto_cycle"] ? 1 : 0);
 
-    applyAI(r, g, b, intensity, dur, pattern, autoCycleOpt);
-    sendAck(msgId, "ok");
+    if (gateOn) {
+      // Normal behavior: update state + animate
+      applyAI(r, g, b, intensity, dur, pattern, autoCycleOpt);
+      sendAck(msgId, "ok");
+    } else {
+      // Cache only, keep LEDs OFF
+      gBase = CRGB(r, g, b);
+      gIntensity = intensity;
+      if (pattern >= 0) gPattern = (uint8_t)pattern;
+      if (autoCycleOpt != -1) gAutoCycle = (autoCycleOpt == 1);
+      if (dur > 0) { gStartMs = millis(); gEndMs = gStartMs + dur; } else { gEndMs = 0; }
+      gActive = false;
+      clearAll();
+      forceTopRowsOff();
+      FastLED.show();
+      sendAck(msgId, "queued", "pc_led_gate_off");
+    }
     return;
   }
 
   sendAck(msgId, "error", "unknown_cmd");
 }
 
-// ============== Touch trigger ==============
-void updateTouchTrigger() {
-  int v = touchRead(TOUCH_PIN);
-  bool isTouch = (v < TOUCH_THRESHOLD);
+// ============== Touch => Gate toggle ==============
+// ---- touch switch stability helpers ----
+static bool gWaitForRelease = false;
+static bool gTouchStable = false;
+static uint32_t gTouchStableSince = 0;
+
+// 你需要校准这两个阈值：TH_ON < TH_OFF
+// 例：不摸 baseline ~ 1200，摸住 ~ 500
+// 那就 TH_ON=800, TH_OFF=950
+const int TOUCH_TH_ON  = 600;   // 低于它 => 认为触摸
+const int TOUCH_TH_OFF = 750;   // 高于它 => 认为松手
+const uint32_t TOUCH_DEBOUNCE_MS = 80;   // 触摸/松手都要稳定这么久才算
+
+int touchReadFiltered() {
+  // median of 5
+  int a[5];
+  for (int i=0;i<5;i++) a[i]=touchRead(TOUCH_PIN);
+  // sort small
+  for(int i=0;i<5;i++) for(int j=i+1;j<5;j++) if(a[j]<a[i]) {int t=a[i];a[i]=a[j];a[j]=t;}
+  return a[2];
+}
+
+void updateTouchGate() {
   uint32_t now = millis();
+  int v = touchReadFiltered();
 
-  if (isTouch && !gTouching) {
-    gTouching = true;
-    gTouchStartMs = now;
-    gTouchFired = false;
+  // hysteresis state (raw -> candidate state)
+  bool candidateTouch = gTouchStable ? (v < TOUCH_TH_OFF) : (v < TOUCH_TH_ON);
+
+  // debounce: only accept change after stable for TOUCH_DEBOUNCE_MS
+  static bool lastCandidate = false;
+  if (candidateTouch != lastCandidate) {
+    lastCandidate = candidateTouch;
+    gTouchStableSince = now;
   }
-  if (!isTouch && gTouching) {
-    gTouching = false;
-    gTouchFired = false;
+  if (now - gTouchStableSince < TOUCH_DEBOUNCE_MS) return;
+
+  // accepted stable touch state
+  bool stableTouch = lastCandidate;
+
+  // after toggle, must wait for release
+  if (gWaitForRelease) {
+    if (!stableTouch) gWaitForRelease = false;
+    return;
   }
 
-  if (gTouching && !gTouchFired) {
-    uint32_t held = now - gTouchStartMs;
-    if (held >= TOUCH_MIN_MS && held <= TOUCH_MAX_MS) {
-      sendTriggerEvent("touch", held);
-      gTouchFired = true;
-    } else if (held > TOUCH_MAX_MS) {
-      gTouchFired = true;
+  // toggle only on "touch down" (rising edge)
+  static bool prevStableTouch = false;
+  if (stableTouch && !prevStableTouch) {
+    gPcLedGate = !gPcLedGate;
+
+    if (gPcLedGate) {
+      // Gate turned ON: resume animation using the last cached color/intensity
+      gActive = true;
+      gStartMs = millis();
+      // If a duration was set and already elapsed, make it indefinite on resume
+      if (gEndMs != 0 && (int32_t)(gEndMs - gStartMs) <= 0) gEndMs = 0;
+    } else {
+      // Gate turned OFF: hard-black the matrix
+      gActive = false;
+      clearAll();
+      forceTopRowsOff();
+      FastLED.show();
     }
+
+    sendGateState();
+    gWaitForRelease = true; // lock until release
+  }
+  prevStableTouch = stableTouch;
+}
+
+// ============== LDR => mute_state ==============
+static bool gMutedByPc = false;          // optional (not used by web right now)
+static bool gMuteEffective = false;      // last effective mute sent to PC
+
+void updateEffectiveMuteAndNotify() {
+  bool effective = (gMutedByLight || gMutedByPc);
+  if (effective != gMuteEffective) {
+    gMuteEffective = effective;
+    sendMuteState(gMuteEffective);
   }
 }
 
-// ============== Button trigger (NEW) ==============
-void updateButtonTrigger() {
-  int raw = digitalRead(BTN_PIN);
-  bool pressed = BTN_ACTIVE_LOW ? (raw == LOW) : (raw == HIGH);
-
+void updateLdrMute() {
   uint32_t now = millis();
+  int raw = analogRead(LDR_PIN); // 0..4095 (depends on wiring; calibrate!)
 
-  if (pressed != gBtnLastRead) {
-    gBtnLastRead = pressed;
-    gBtnLastChangeMs = now;
+  bool nextMuted = gMutedByLight;
+
+  // NOTE: depending on your LDR divider, raw may go UP when darker or the opposite.
+  // This logic assumes: darker => larger raw. If your readings are reversed, flip the comparisons.
+  if (!gMutedByLight) {
+    // currently unmuted: only mute when it becomes clearly darker
+    if (raw < (LDR_THRESHOLD + LDR_HYST)) nextMuted = true;
+  } else {
+    // currently muted: only unmute when it becomes clearly brighter
+    if (raw > (LDR_THRESHOLD - LDR_HYST)) nextMuted = false;
   }
 
-  // accept stable state after debounce time
-  if ((now - gBtnLastChangeMs) > BTN_DEBOUNCE_MS) {
-    if (gBtnStable != gBtnLastRead) {
-      gBtnStable = gBtnLastRead;
-
-      // trigger only on press down
-      if (gBtnStable) {
-        sendTriggerEvent("button", 0);
-      }
-    }
+  if (nextMuted != gMutedByLight && (now - gLdrLastFlipMs) > LDR_DEBOUNCE_MS) {
+    gMutedByLight = nextMuted;
+    gLdrLastFlipMs = now;
+    updateEffectiveMuteAndNotify();
   }
 }
 
@@ -358,9 +449,11 @@ void updateButtonTrigger() {
 void processSerialInput() {
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
-    if (c == '\r') continue;
+    if (c == '
+') continue;
 
-    if (c == '\n') {
+    if (c == '
+') {
       String line = gSerialLine;
       gSerialLine = "";
       line.trim();
@@ -370,8 +463,9 @@ void processSerialInput() {
       Serial.println(line);
       handleIncomingJsonText(line);
     } else {
-      if (gSerialLine.length() < 2048) gSerialLine += c;
-      else {
+      if (gSerialLine.length() < 2048) {
+        gSerialLine += c;
+      } else {
         gSerialLine = "";
         Serial.println("[SER] Line too long, reset");
       }
@@ -380,11 +474,12 @@ void processSerialInput() {
 }
 
 void setup() {
+ {
   Serial.begin(115200);
   delay(200);
 
-  // Button input
-  pinMode(BTN_PIN, INPUT_PULLUP); // works for most modules; if your module is active HIGH, keep this but set BTN_ACTIVE_LOW=0
+  // LDR input (ADC)
+  pinMode(LDR_PIN, INPUT);
 
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, PHYS_LEDS);
   clearAll();
@@ -395,13 +490,18 @@ void setup() {
   transportSendText("{\"event\":\"hello\",\"matrix\":\"32x8\",\"active_rows\":\"y=4..7\",\"transport\":\"serial\"}");
   Serial.printf("[INFO] BRIGHTNESS_CAP=%d\n", BRIGHTNESS_CAP);
   Serial.printf("[TOUCH] TOUCH_THRESHOLD=%d\n", TOUCH_THRESHOLD);
-  Serial.printf("[BTN] pin=%d active_low=%d\n", BTN_PIN, BTN_ACTIVE_LOW);
+  Serial.printf("[GATE] hold_ms=%d initial=%d\n", GATE_TOGGLE_HOLD_MS, (int)gPcLedGate);
+  Serial.printf("[LDR] pin=%d threshold=%d hyst=%d\n", LDR_PIN, LDR_THRESHOLD, LDR_HYST);
+
+  // Sync states to computer on boot
+  sendGateState();
+  sendMuteState(gMutedByLight);
 }
 
 void loop() {
   processSerialInput();
   renderAI();
 
-  updateTouchTrigger();
-  updateButtonTrigger();
+  updateTouchGate();
+  updateLdrMute();
 }
