@@ -525,7 +525,7 @@ async function analyzeAtmosphere(passage) {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apikey}`
+      'Authorization': `Bearer ${API_KEY}`
     },
     body: JSON.stringify({
       model: 'gpt-4o-mini',
