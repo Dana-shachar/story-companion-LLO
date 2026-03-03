@@ -73,8 +73,8 @@ static uint32_t gLastToggleMs = 0;
 
 // ----------------- LDR mute tuning -----------------
 // Dynamic calibration: same approach as touch — baseline sampled at startup
-static const uint32_t LDR_DEBOUNCE_MS    = 2000;  // long debounce — ADC is noisy
-static const float    LDR_SMOOTH_ALPHA   = 0.08f; // heavy EWM — kills spikes
+static const uint32_t LDR_DEBOUNCE_MS    = 800;   // states are well-separated — shorter OK
+static const float    LDR_SMOOTH_ALPHA   = 0.20f; // faster response, still spike-resistant
 // Sensor is UNCOVERED at boot (bright baseline).
 // Mute   when smoothed > baseline * 2.0  (clearly covered — 2x darker than ambient)
 // Unmute when smoothed < baseline * 1.40 (clearly uncovered again)
