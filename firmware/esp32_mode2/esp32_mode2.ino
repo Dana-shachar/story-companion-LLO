@@ -73,22 +73,22 @@ static uint32_t gLastToggleMs = 0;
 
 // ----------------- LDR mute tuning -----------------
 // Dynamic calibration: same approach as touch — baseline sampled at startup
-static const uint32_t LDR_DEBOUNCE_MS    = 1500;  // longer debounce — ADC is noisy
-static const float    LDR_SMOOTH_ALPHA   = 0.08f; // heavy EWM — kills spikes, slow response OK
-// Sensor is COVERED at boot (dark baseline).
-// Unmute when smoothed drops to 70% of dark baseline (uncovered = bright = lower raw).
-// Re-mute when smoothed climbs back above 85% of dark baseline (covered again).
-static const float    LDR_MUTE_FACTOR    = 0.85f; // re-mute when smoothed > baseline * 0.85
-static const float    LDR_UNMUTE_FACTOR  = 0.70f; // unmute  when smoothed < baseline * 0.70
+static const uint32_t LDR_DEBOUNCE_MS    = 2000;  // long debounce — ADC is noisy
+static const float    LDR_SMOOTH_ALPHA   = 0.08f; // heavy EWM — kills spikes
+// Sensor is UNCOVERED at boot (bright baseline).
+// Mute   when smoothed > baseline * 2.0  (clearly covered — 2x darker than ambient)
+// Unmute when smoothed < baseline * 1.40 (clearly uncovered again)
+static const float    LDR_MUTE_FACTOR    = 2.00f;
+static const float    LDR_UNMUTE_FACTOR  = 1.40f;
 
 static float gLdrBaseline        = 0;
 static float gLdrSmoothed        = 0;   // EWM-smoothed reading
 static int   gLdrMuteThreshold   = 0;   // computed at startup
 static int   gLdrUnmuteThreshold = 0;   // computed at startup
 
-static bool gMutedByLight = true;   // starts muted — sensor covered at boot
+static bool gMutedByLight = false;  // starts unmuted — sensor uncovered at boot
 static bool gMutedByPc = false;
-static bool gEffectiveMuted = true; // send muted=true on hello
+static bool gEffectiveMuted = false;
 static uint32_t gLdrLastFlipMs = 0;
 
 // ----------------- Serial RX -----------------
@@ -496,8 +496,8 @@ void setup() {
                   gTouchBaseline, gTouchThOn, gTouchThOff);
   }
 
-  // Calibrate LDR baseline — sample 50 readings over 1 second (keep sensor COVERED)
-  Serial.println("[LDR] Calibrating baseline — keep sensor covered...");
+  // Calibrate LDR baseline — sample 50 readings over 1 second (leave sensor UNCOVERED)
+  Serial.println("[LDR] Calibrating baseline — leave sensor uncovered...");
   {
     long sum = 0;
     const int CALIB_N = 50;
