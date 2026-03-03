@@ -73,14 +73,16 @@ static uint32_t gLastToggleMs = 0;
 
 // ----------------- LDR mute tuning -----------------
 // Dynamic calibration: same approach as touch — baseline sampled at startup
-static const uint32_t LDR_DEBOUNCE_MS    = 500;
+static const uint32_t LDR_DEBOUNCE_MS    = 1500;  // longer debounce — ADC is noisy
+static const float    LDR_SMOOTH_ALPHA   = 0.08f; // heavy EWM — kills spikes, slow response OK
 // Sensor is COVERED at boot (dark baseline).
-// Unmute when raw drops to 70% of dark baseline (uncovered = bright = lower raw).
-// Re-mute when raw climbs back above 85% of dark baseline (covered again).
-static const float    LDR_MUTE_FACTOR    = 0.85f; // re-mute when raw > baseline * 0.85
-static const float    LDR_UNMUTE_FACTOR  = 0.70f; // unmute  when raw < baseline * 0.70
+// Unmute when smoothed drops to 70% of dark baseline (uncovered = bright = lower raw).
+// Re-mute when smoothed climbs back above 85% of dark baseline (covered again).
+static const float    LDR_MUTE_FACTOR    = 0.85f; // re-mute when smoothed > baseline * 0.85
+static const float    LDR_UNMUTE_FACTOR  = 0.70f; // unmute  when smoothed < baseline * 0.70
 
 static float gLdrBaseline        = 0;
+static float gLdrSmoothed        = 0;   // EWM-smoothed reading
 static int   gLdrMuteThreshold   = 0;   // computed at startup
 static int   gLdrUnmuteThreshold = 0;   // computed at startup
 
@@ -355,21 +357,24 @@ static void updateLdrMute() {
   uint32_t now = millis();
   int raw = analogRead(LDR_PIN); // 0..4095
 
-  // Debug: print every 3 seconds so you can see live values in serial monitor
+  // Heavy EWM smoothing — kills ADC noise spikes (ported from Dana's sensor project)
+  gLdrSmoothed = LDR_SMOOTH_ALPHA * raw + (1.0f - LDR_SMOOTH_ALPHA) * gLdrSmoothed;
+
+  // Debug: print every 3 seconds
   static uint32_t sLdrLastPrint = 0;
   if (now - sLdrLastPrint > 3000) {
-    Serial.printf("[LDR] raw=%d baseline=%.0f muteAt=%d unmuteAt=%d muted=%d\n",
-                  raw, gLdrBaseline, gLdrMuteThreshold, gLdrUnmuteThreshold, (int)gMutedByLight);
+    Serial.printf("[LDR] raw=%d smoothed=%.0f baseline=%.0f muteAt=%d unmuteAt=%d muted=%d\n",
+                  raw, gLdrSmoothed, gLdrBaseline, gLdrMuteThreshold, gLdrUnmuteThreshold, (int)gMutedByLight);
     sLdrLastPrint = now;
   }
 
   bool nextMuted = gMutedByLight;
 
-  // darker => higher raw: mute when raw climbs above mute threshold
+  // Use smoothed value — spikes no longer reach threshold
   if (!gMutedByLight) {
-    if (raw > gLdrMuteThreshold) nextMuted = true;
+    if (gLdrSmoothed > gLdrMuteThreshold) nextMuted = true;
   } else {
-    if (raw < gLdrUnmuteThreshold) nextMuted = false;
+    if (gLdrSmoothed < gLdrUnmuteThreshold) nextMuted = false;
   }
 
   if (nextMuted != gMutedByLight && (now - gLdrLastFlipMs) > LDR_DEBOUNCE_MS) {
@@ -491,8 +496,8 @@ void setup() {
                   gTouchBaseline, gTouchThOn, gTouchThOff);
   }
 
-  // Calibrate LDR baseline — sample 50 readings over 1 second (leave sensor uncovered)
-  Serial.println("[LDR] Calibrating baseline — leave sensor uncovered...");
+  // Calibrate LDR baseline — sample 50 readings over 1 second (keep sensor COVERED)
+  Serial.println("[LDR] Calibrating baseline — keep sensor covered...");
   {
     long sum = 0;
     const int CALIB_N = 50;
@@ -501,6 +506,7 @@ void setup() {
       delay(20);
     }
     gLdrBaseline        = (float)(sum / CALIB_N);
+    gLdrSmoothed        = gLdrBaseline;
     gLdrMuteThreshold   = (int)(gLdrBaseline * LDR_MUTE_FACTOR);
     gLdrUnmuteThreshold = (int)(gLdrBaseline * LDR_UNMUTE_FACTOR);
     Serial.printf("[LDR] baseline=%.0f muteAt=%d unmuteAt=%d\n",
