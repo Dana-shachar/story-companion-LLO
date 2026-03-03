@@ -74,16 +74,19 @@ static uint32_t gLastToggleMs = 0;
 // ----------------- LDR mute tuning -----------------
 // Dynamic calibration: same approach as touch — baseline sampled at startup
 static const uint32_t LDR_DEBOUNCE_MS    = 500;
-static const float    LDR_MUTE_FACTOR    = 1.30f; // mute   when raw > baseline * 1.30 (30% darker)
-static const float    LDR_UNMUTE_FACTOR  = 1.15f; // unmute when raw < baseline * 1.15 (hysteresis)
+// Sensor is COVERED at boot (dark baseline).
+// Unmute when raw drops to 70% of dark baseline (uncovered = bright = lower raw).
+// Re-mute when raw climbs back above 85% of dark baseline (covered again).
+static const float    LDR_MUTE_FACTOR    = 0.85f; // re-mute when raw > baseline * 0.85
+static const float    LDR_UNMUTE_FACTOR  = 0.70f; // unmute  when raw < baseline * 0.70
 
 static float gLdrBaseline        = 0;
 static int   gLdrMuteThreshold   = 0;   // computed at startup
 static int   gLdrUnmuteThreshold = 0;   // computed at startup
 
-static bool gMutedByLight = false;
+static bool gMutedByLight = true;   // starts muted — sensor covered at boot
 static bool gMutedByPc = false;
-static bool gEffectiveMuted = false;
+static bool gEffectiveMuted = true; // send muted=true on hello
 static uint32_t gLdrLastFlipMs = 0;
 
 // ----------------- Serial RX -----------------
