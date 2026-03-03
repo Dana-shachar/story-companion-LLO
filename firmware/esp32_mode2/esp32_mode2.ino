@@ -71,13 +71,18 @@ static bool gTouchArmed = true;
 static bool gPrevPressed = false;
 static uint32_t gLastToggleMs = 0;
 
-// ----------------- LDR mute tuning (kept, but you can ignore) -----------------
-static const int LDR_THRESHOLD = 1100;     // adjust if needed
-static const int LDR_HYST = 60;
-static const uint32_t LDR_DEBOUNCE_MS = 700;
+// ----------------- LDR mute tuning -----------------
+// Dynamic calibration: same approach as touch — baseline sampled at startup
+static const uint32_t LDR_DEBOUNCE_MS    = 500;
+static const float    LDR_MUTE_FACTOR    = 1.30f; // mute   when raw > baseline * 1.30 (30% darker)
+static const float    LDR_UNMUTE_FACTOR  = 1.15f; // unmute when raw < baseline * 1.15 (hysteresis)
+
+static float gLdrBaseline        = 0;
+static int   gLdrMuteThreshold   = 0;   // computed at startup
+static int   gLdrUnmuteThreshold = 0;   // computed at startup
 
 static bool gMutedByLight = false;
-static bool gMutedByPc = false;            // optional command from PC
+static bool gMutedByPc = false;
 static bool gEffectiveMuted = false;
 static uint32_t gLdrLastFlipMs = 0;
 
@@ -347,13 +352,21 @@ static void updateLdrMute() {
   uint32_t now = millis();
   int raw = analogRead(LDR_PIN); // 0..4095
 
+  // Debug: print every 3 seconds so you can see live values in serial monitor
+  static uint32_t sLdrLastPrint = 0;
+  if (now - sLdrLastPrint > 3000) {
+    Serial.printf("[LDR] raw=%d baseline=%.0f muteAt=%d unmuteAt=%d muted=%d\n",
+                  raw, gLdrBaseline, gLdrMuteThreshold, gLdrUnmuteThreshold, (int)gMutedByLight);
+    sLdrLastPrint = now;
+  }
+
   bool nextMuted = gMutedByLight;
 
-  // Assumption: darker => higher raw (if your wiring is opposite, flip comparisons here)
+  // darker => higher raw: mute when raw climbs above mute threshold
   if (!gMutedByLight) {
-    if (raw > (LDR_THRESHOLD + LDR_HYST)) nextMuted = true;
+    if (raw > gLdrMuteThreshold) nextMuted = true;
   } else {
-    if (raw < (LDR_THRESHOLD - LDR_HYST)) nextMuted = false;
+    if (raw < gLdrUnmuteThreshold) nextMuted = false;
   }
 
   if (nextMuted != gMutedByLight && (now - gLdrLastFlipMs) > LDR_DEBOUNCE_MS) {
@@ -475,12 +488,25 @@ void setup() {
                   gTouchBaseline, gTouchThOn, gTouchThOff);
   }
 
+  // Calibrate LDR baseline — sample 50 readings over 1 second (leave sensor uncovered)
+  Serial.println("[LDR] Calibrating baseline — leave sensor uncovered...");
+  {
+    long sum = 0;
+    const int CALIB_N = 50;
+    for (int i = 0; i < CALIB_N; i++) {
+      sum += analogRead(LDR_PIN);
+      delay(20);
+    }
+    gLdrBaseline        = (float)(sum / CALIB_N);
+    gLdrMuteThreshold   = (int)(gLdrBaseline * LDR_MUTE_FACTOR);
+    gLdrUnmuteThreshold = (int)(gLdrBaseline * LDR_UNMUTE_FACTOR);
+    Serial.printf("[LDR] baseline=%.0f muteAt=%d unmuteAt=%d\n",
+                  gLdrBaseline, gLdrMuteThreshold, gLdrUnmuteThreshold);
+  }
+
   transportSendText("{\"event\":\"hello\",\"matrix\":\"32x8\",\"active_rows\":\"y=4..7\",\"transport\":\"serial\"}");
   sendGateState();
   sendMuteState(gEffectiveMuted);
-
-  Serial.printf("[LDR] pin=%d threshold=%d hyst=%d debounce=%lu\n",
-                LDR_PIN, LDR_THRESHOLD, LDR_HYST, (unsigned long)LDR_DEBOUNCE_MS);
 }
 
 void loop() {
