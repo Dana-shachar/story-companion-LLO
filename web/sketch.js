@@ -912,8 +912,7 @@ async function connectSerial() {
     readFromArduino(); // 不要 await，保持后台读
 
     arduinoConnected = true;
-    connectButton.disabled = true;
-    connectButton.textContent = 'Device Connected';
+    connectButton.style.display = 'none';
     console.log('Arduino connected!');
   } catch (err) {
     console.error('Serial connection failed:', err);

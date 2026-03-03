@@ -52,9 +52,18 @@ static const uint8_t BRIGHTNESS_CAP = 80;   // 0..255
 CRGB leds[NUM_LEDS];
 
 // ----------------- Touch gate tuning -----------------
-static const int TOUCH_TH_ON  = 500;  // based on your readings: idle~540, touch~470
-static const int TOUCH_TH_OFF = 520;  // hysteresis
-static const uint32_t TOUCH_DEBOUNCE_MS = 250;
+// Dynamic calibration ported from Dana's capacitive sensor project:
+//   startup baseline + EWM smoothing + slow drift + % thresholds
+static const uint32_t TOUCH_DEBOUNCE_MS  = 250;
+static const float    TOUCH_SMOOTH_ALPHA = 0.6f;   // EWM weight on new reading
+static const float    TOUCH_ON_FACTOR    = 0.90f;  // press  = reading drops to 90% of baseline
+static const float    TOUCH_OFF_FACTOR   = 0.95f;  // release = reading recovers to 95% of baseline
+static const float    TOUCH_DRIFT_ALPHA  = 0.002f; // slow baseline drift when idle
+
+static float    gTouchBaseline = 0;
+static float    gTouchSmoothed = 0;
+static int      gTouchThOn     = 0;   // computed at startup
+static int      gTouchThOff    = 0;   // computed at startup
 
 // Gate state
 static bool gPcLedGate = false;
@@ -279,13 +288,22 @@ static void applyAI(uint8_t r, uint8_t g, uint8_t b, float intensity01,
 // ----------------- Touch gate -----------------
 static void updateTouchGate() {
   uint32_t now = millis();
-  int v = touchRead(TOUCH_PIN);
+  int raw = touchRead(TOUCH_PIN);
 
-  bool pressed  = (v < TOUCH_TH_ON);
-  bool released = (v > TOUCH_TH_OFF);
+  // Exponential smoothing (from Dana's project: kills noise without lag)
+  gTouchSmoothed = TOUCH_SMOOTH_ALPHA * raw + (1.0f - TOUCH_SMOOTH_ALPHA) * gTouchSmoothed;
+
+  // Slow baseline drift — only when clearly not touched (above off threshold)
+  if (gTouchSmoothed > gTouchThOff) {
+    gTouchBaseline = TOUCH_DRIFT_ALPHA * gTouchSmoothed + (1.0f - TOUCH_DRIFT_ALPHA) * gTouchBaseline;
+    gTouchThOn  = (int)(gTouchBaseline * TOUCH_ON_FACTOR);
+    gTouchThOff = (int)(gTouchBaseline * TOUCH_OFF_FACTOR);
+  }
+
+  bool pressed  = (gTouchSmoothed < gTouchThOn);
+  bool released = (gTouchSmoothed > gTouchThOff);
 
   if ((now - gLastToggleMs) < TOUCH_DEBOUNCE_MS) {
-    // still in debounce
     gPrevPressed = pressed;
     if (released) gTouchArmed = true;
     return;
@@ -440,12 +458,27 @@ void setup() {
   forceTopRowsOff();
   FastLED.show();
 
+  // Calibrate touch baseline — sample 50 readings over 1 second (don't touch!)
+  Serial.println("[TOUCH] Calibrating baseline — keep hands off sensor...");
+  {
+    long sum = 0;
+    const int CALIB_N = 50;
+    for (int i = 0; i < CALIB_N; i++) {
+      sum += touchRead(TOUCH_PIN);
+      delay(20);
+    }
+    gTouchBaseline = (float)(sum / CALIB_N);
+    gTouchSmoothed = gTouchBaseline;
+    gTouchThOn  = (int)(gTouchBaseline * TOUCH_ON_FACTOR);
+    gTouchThOff = (int)(gTouchBaseline * TOUCH_OFF_FACTOR);
+    Serial.printf("[TOUCH] baseline=%.0f thOn=%d thOff=%d\n",
+                  gTouchBaseline, gTouchThOn, gTouchThOff);
+  }
+
   transportSendText("{\"event\":\"hello\",\"matrix\":\"32x8\",\"active_rows\":\"y=4..7\",\"transport\":\"serial\"}");
   sendGateState();
   sendMuteState(gEffectiveMuted);
 
-  Serial.printf("[TOUCH] pin=%d TH_ON=%d TH_OFF=%d debounce=%lu initial_gate=%d\n",
-                TOUCH_PIN, TOUCH_TH_ON, TOUCH_TH_OFF, (unsigned long)TOUCH_DEBOUNCE_MS, (int)gPcLedGate);
   Serial.printf("[LDR] pin=%d threshold=%d hyst=%d debounce=%lu\n",
                 LDR_PIN, LDR_THRESHOLD, LDR_HYST, (unsigned long)LDR_DEBOUNCE_MS);
 }
