@@ -100,6 +100,7 @@ static CRGB     gBase = CRGB(0, 0, 0);
 static float    gIntensity = 0.2f;         // 0..1
 static uint8_t  gPattern = 0;              // 0..4
 static bool     gAutoCycle = false;
+static float    waveSpeed = 1.0f;          // wave animation speed multiplier (calm=0.4, medium=1.0)
 static uint32_t gStartMs = 0;
 static uint32_t gEndMs = 0;
 
@@ -109,6 +110,7 @@ static uint8_t  gLastR = 0, gLastG = 0, gLastB = 0;
 static float    gLastIntensity = 0.2f;
 static int      gLastPatternOpt = -1;      // -1 means "keep"
 static int      gLastAutoCycleOpt = -1;    // -1 means "keep"
+static float    lastWaveSpeed = 1.0f;
 static uint32_t gLastDurationMs = 0;
 
 // ----------------- Utils: mapping -----------------
@@ -171,15 +173,23 @@ static void sendMuteState(bool muted) {
 }
 
 // ----------------- Patterns -----------------
-static uint8_t storyPattern(uint32_t sinceMs) {
-  // Simple cycle among 0..4 every ~8s
-  return (sinceMs / 8000UL) % 5;
+static uint8_t storyPattern(uint32_t nowMs) {
+  // Use absolute time so pattern position doesn't reset when a new scene loads
+  // waveSpeed < 1.2 = medium: tide(1)→wave(3) every 15s (30s total cycle)
+  // waveSpeed >= 1.2 = intense: sparkle(2)→wave(3)→chase(4) every 10s (30s total cycle)
+  if (waveSpeed < 1.2f) {
+    const uint8_t seq[2] = {1, 3};
+    return seq[(nowMs / 15000UL) % 2];
+  } else {
+    const uint8_t seq[3] = {2, 3, 4};
+    return seq[(nowMs / 10000UL) % 3];
+  }
 }
 
 static CRGB driftColor(CRGB base, uint32_t nowMs) {
-  // Gentle hue drift based on time
+  // Oscillate hue ±12 around base — stays within mood color
   CHSV hsv = rgb2hsv_approximate(base);
-  hsv.hue += (uint8_t)(nowMs / 60UL);
+  hsv.hue += (int8_t)(sinf(nowMs / 8000.0f) * 12.0f);
   return CRGB(hsv);
 }
 
@@ -191,12 +201,20 @@ static void patternSolid(CRGB c) {
   }
 }
 
-static void patternPulse(CRGB c, uint32_t sinceMs) {
-  float t = (sinceMs % 2000UL) / 2000.0f;
-  float wave = 0.5f + 0.5f * sinf(2.0f * PI * t);
-  uint8_t scale = (uint8_t)(255.0f * wave);
-  CRGB cc = c; cc.nscale8_video(scale);
-  patternSolid(cc);
+// Calm: single bright crest sweeps diagonally + gentle pulse + organic speed wobble
+static void patternTide(CRGB c, uint32_t sinceMs, uint32_t nowMs) {
+  float pulse      = 0.70f + 0.30f * sinf(2.0f * PI * sinceMs / 4000.0f);
+  float speedWobble = 1.0f + 0.35f * sinf(nowMs / 11000.0f);
+  for (uint8_t y = 4; y < H; y++) {
+    for (uint8_t x = 0; x < W; x++) {
+      float t = (sinceMs / 1000.0f) * waveSpeed * speedWobble - x * 0.15f - y * 0.08f;
+      float raw = sinf(2.0f * PI * t / 3.0f);
+      float w = raw > 0.0f ? raw * raw * pulse : 0.0f;
+      uint8_t sc = (uint8_t)(255.0f * w);
+      CRGB cc = c; cc.nscale8_video(sc);
+      leds[XY(x, y)] = cc;
+    }
+  }
 }
 
 static uint32_t xorshift32(uint32_t& s) {
@@ -205,16 +223,18 @@ static uint32_t xorshift32(uint32_t& s) {
 }
 
 static void patternSparkle(CRGB c, uint32_t nowMs) {
-  // fade a bit
+  // fade a bit — faster fade during dense bursts
+  uint8_t fadeAmt = ((nowMs / 8000UL) % 2 == 0) ? 28 : 40;
   for (uint8_t y = 4; y < H; y++) {
     for (uint8_t x = 0; x < W; x++) {
-      leds[XY(x, y)].fadeToBlackBy(28);
+      leds[XY(x, y)].fadeToBlackBy(fadeAmt);
     }
   }
-  // add sparkles
+  // alternate between sparse (5) and dense (14) sparkles every 8s
+  int count = ((nowMs / 8000UL) % 2 == 0) ? 5 : 14;
   static uint32_t seed = 0x12345678;
   seed ^= nowMs;
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < count; i++) {
     uint32_t r = xorshift32(seed);
     uint8_t x = r % W;
     uint8_t y = 4 + ((r >> 8) % 4);
@@ -222,11 +242,16 @@ static void patternSparkle(CRGB c, uint32_t nowMs) {
   }
 }
 
-static void patternWave(CRGB c, uint32_t sinceMs) {
+// Medium: wave with direction flip every 10s + speed wobble + brightness pulse
+static void patternWave(CRGB c, uint32_t sinceMs, uint32_t nowMs) {
+  float dir         = ((nowMs / 10000UL) % 2 == 0) ? 1.0f : -1.0f; // flip direction every 10s
+  float speedWobble = 1.0f + 0.40f * sinf(nowMs / 9000.0f);
+  float pulse       = 0.75f + 0.25f * sinf(2.0f * PI * nowMs / 3000.0f); // 3s brightness pulse
   for (uint8_t y = 4; y < H; y++) {
     for (uint8_t x = 0; x < W; x++) {
-      float t = (sinceMs / 1000.0f) + x * 0.25f + y * 0.6f;
-      float w = 0.5f + 0.5f * sinf(2.0f * PI * t / 3.5f);
+      float t = (sinceMs / 1000.0f) * waveSpeed * speedWobble - x * 0.18f * dir - y * 0.10f;
+      float raw = sinf(2.0f * PI * t / 2.0f);
+      float w = (raw > 0.0f ? (0.08f + 0.92f * raw * raw) : 0.08f) * pulse;
       uint8_t sc = (uint8_t)(255.0f * w);
       CRGB cc = c; cc.nscale8_video(sc);
       leds[XY(x, y)] = cc;
@@ -234,9 +259,39 @@ static void patternWave(CRGB c, uint32_t sinceMs) {
   }
 }
 
-static void patternDrift(CRGB c, uint32_t nowMs) {
-  CRGB d = driftColor(c, nowMs);
-  patternSolid(d);
+// Intense: 3 comets — comet 1 goes right-to-left, each has organic speed variation
+static void patternChase(CRGB c, uint32_t nowMs) {
+  for (uint8_t y = 4; y < H; y++) {
+    for (uint8_t x = 0; x < W; x++) {
+      leds[XY(x, y)].fadeToBlackBy(25);
+    }
+  }
+  // base speeds, rows, hue offsets — comet 1 direction is reversed
+  const float   baseSpeeds[3] = { 14.0f,  9.0f, 19.0f };
+  const uint8_t rows[3]       = {  4,      6,     5    };
+  const int8_t  hueOff[3]     = {  0,     12,   -12    };
+  const float   wobblePeriods[3] = { 7300.0f, 5900.0f, 9100.0f }; // prime-ish ms periods
+
+  for (int i = 0; i < 3; i++) {
+    float spd = baseSpeeds[i] * (1.0f + 0.25f * sinf(nowMs / wobblePeriods[i]));
+    float raw = (nowMs / 1000.0f) * spd + i * 8.7f;
+    float pos;
+    if (i == 1) {
+      // comet 1 travels right-to-left
+      pos = (float)(W + 4) - fmodf(raw, (float)(W + 8));
+    } else {
+      pos = fmodf(raw, (float)(W + 8)) - 4;
+    }
+    int x = (int)roundf(pos);
+    if (x < 0 || x >= (int)W) continue;
+    CHSV hsv = rgb2hsv_approximate(c);
+    hsv.hue += (uint8_t)hueOff[i];
+    CRGB head = CRGB(hsv);
+    leds[XY(x, rows[i])] = head;
+    // trail in the direction the comet came from
+    int trail = (i == 1) ? x + 1 : x - 1;
+    if (trail >= 0 && trail < (int)W) { CRGB t = head; t.nscale8(70); leds[XY(trail, rows[i])] += t; }
+  }
 }
 
 // Render current pattern
@@ -253,9 +308,9 @@ static void renderAI() {
   }
 
   uint32_t since = now - gStartMs;
-  uint8_t p = gAutoCycle ? storyPattern(since) : gPattern;
+  uint8_t p = gAutoCycle ? storyPattern(now) : gPattern;
 
-  CRGB base = driftColor(gBase, now);
+  CRGB base = gBase;
   float power = constrain(gIntensity, 0.0f, 1.0f);
   base.nscale8_video((uint8_t)(power * 255.0f));
 
@@ -268,10 +323,36 @@ static void renderAI() {
 
   // draw
   if (p == 0) patternSolid(base);
-  else if (p == 1) patternPulse(base, since);
+  else if (p == 1) patternTide(base, since, now);
   else if (p == 2) patternSparkle(base, now);
-  else if (p == 3) patternWave(base, since);
-  else patternDrift(base, now);
+  else if (p == 3) patternWave(base, since, now);
+  else patternChase(base, now);
+
+  // Random energy surge flash — irregular per-pixel hue (XOR pattern), clamped, no harsh white
+  if (gAutoCycle && waveSpeed >= 1.2f) {
+    static uint32_t nextFlashMs = 0;
+    static uint32_t flashEndMs  = 0;
+    static uint8_t  flashPhase  = 0;
+    if (nextFlashMs == 0) nextFlashMs = now + (uint32_t)random(3000, 7001);
+    if (!flashEndMs && now >= nextFlashMs) {
+      flashEndMs  = now + 30;
+      flashPhase  = (uint8_t)random(0, 256); // new random hue base each flash
+      nextFlashMs = now + (uint32_t)random(3000, 7001);
+    }
+    if (flashEndMs && now < flashEndMs) {
+      CHSV baseHsv = rgb2hsv_approximate(base);
+      for (uint8_t y = 4; y < H; y++) {
+        for (uint8_t x = 0; x < W; x++) {
+          CHSV hpx = baseHsv;
+          hpx.hue += flashPhase + x * 3 + (y - 4) * 7 + (uint8_t)(x ^ y) * 2;
+          hpx.val  = 180; // clamped brightness — not oversaturated
+          leds[XY(x, y)] += CRGB(hpx);
+        }
+      }
+    } else if (flashEndMs && now >= flashEndMs) {
+      flashEndMs = 0;
+    }
+  }
 
   forceTopRowsOff();
   FastLED.show();
@@ -279,7 +360,7 @@ static void renderAI() {
 
 // Apply a new command into state (does not check gate)
 static void applyAI(uint8_t r, uint8_t g, uint8_t b, float intensity01,
-                    uint32_t durationMs, int patternOpt, int autoCycleOpt) {
+                    uint32_t durationMs, int patternOpt, int autoCycleOpt, float speedOpt) {
   gActive = true;
   gBase = CRGB(r, g, b);
   gIntensity = constrain(intensity01, 0.0f, 1.0f);
@@ -290,6 +371,7 @@ static void applyAI(uint8_t r, uint8_t g, uint8_t b, float intensity01,
   }
   if (autoCycleOpt == 0) gAutoCycle = false;
   if (autoCycleOpt == 1) gAutoCycle = true;
+  if (speedOpt >= 0.0f) waveSpeed = speedOpt;
 
   gEndMs = (durationMs == 0) ? 0 : (millis() + durationMs);
   gStartMs = millis();
@@ -327,7 +409,7 @@ static void updateTouchGate() {
     // If gate turned ON and we have cached cmd, apply immediately
     if (gPcLedGate && gHasLastCmd) {
       applyAI(gLastR, gLastG, gLastB, gLastIntensity, gLastDurationMs,
-              gLastPatternOpt, gLastAutoCycleOpt);
+              gLastPatternOpt, gLastAutoCycleOpt, lastWaveSpeed);
     }
 
     // If turned OFF, blank immediately
@@ -421,8 +503,10 @@ static void handleIncomingJsonText(const String& line) {
 
     int patternOpt = -1;
     int autoCycleOpt = -1;
+    float speedOpt = -1.0f;
     if (doc.containsKey("pattern")) patternOpt = (int)doc["pattern"];
     if (doc.containsKey("auto_cycle")) autoCycleOpt = (bool)doc["auto_cycle"] ? 1 : 0;
+    if (doc.containsKey("speed")) speedOpt = doc["speed"].as<float>();
 
     // Cache always (so Gate ON can resume immediately)
     gHasLastCmd = true;
@@ -431,9 +515,10 @@ static void handleIncomingJsonText(const String& line) {
     gLastDurationMs = durationMs;
     gLastPatternOpt = patternOpt;
     gLastAutoCycleOpt = autoCycleOpt;
+    lastWaveSpeed = speedOpt;
 
     if (gPcLedGate) {
-      applyAI(r, g, b, intensity, durationMs, patternOpt, autoCycleOpt);
+      applyAI(r, g, b, intensity, durationMs, patternOpt, autoCycleOpt, speedOpt);
       sendAck(msg_id, "ok", "applied");
     } else {
       // gate off: keep black, but acknowledge queued
@@ -472,6 +557,7 @@ void setup() {
   delay(200);
 
   pinMode(LDR_PIN, INPUT);
+  randomSeed(analogRead(LDR_PIN)); // seed RNG with analog noise
 
   FastLED.addLeds<WS2812B, LED_PIN, GRB>(leds, NUM_LEDS);
   FastLED.setBrightness(BRIGHTNESS_CAP);

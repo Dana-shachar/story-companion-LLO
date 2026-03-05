@@ -276,7 +276,7 @@ function playCuratedAudio(scene) {
   }
 
   applyMoodTint(moodToColor(scene.mood), scene.intensity);
-  sendLedToArduino(moodToRgbScaled(moodToColor(scene.mood), scene.intensity));
+  sendLedToArduino(moodToRgbScaled(moodToColor(scene.mood), scene.intensity, scene.mood));
   let label = scene.textureFile ? ` · ${scene.textureFile.replace(/\d+\.mp3$/i, '').toLowerCase()}` : '';
   setAtmosphereStatus(`${scene.mood}${label}`);
   updateMoodDisplay(scene.mood, scene.textureFile ? fileBaseName(scene.textureFile) : null);
@@ -768,7 +768,7 @@ function playAtmosphere(atmosphere) {
   }
 
   applyMoodTint(moodToColor(mood), intensity);
-  sendLedToArduino(moodToRgbScaled(moodToColor(mood), intensity));
+  sendLedToArduino(moodToRgbScaled(moodToColor(mood), intensity, mood));
   let settingLabel = texFile ? ` · ${fileBaseName(texFile)}` : '';
   setAtmosphereStatus(`${mood}${settingLabel}`);
   updateMoodDisplay(mood, texFile ? fileBaseName(texFile) : null);
@@ -829,12 +829,6 @@ function togglePause() {
   document.getElementById('pause-btn').textContent = isPaused ? 'Resume' : 'Pause';
 }
 
-function setMuted(muted) {
-  isMuted = !!muted;
-  Howler.mute(isMuted);
-  document.getElementById('mute-btn').textContent = isMuted ? 'Unmute' : 'Mute';
-}
-
 // keep for backward compatibility (if any old calls exist)
 function toggleMute() {
   setMuted(!isMuted);
@@ -888,11 +882,29 @@ function hexToRgba(hex, alpha) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function moodToRgbScaled(hex, intensity) {
+const MOOD_PATTERN = {
+  melancholy: 'calm', ominous: 'calm',
+  mysterious: 'medium', romantic: 'medium',
+  whimsical: 'intense', joyful: 'intense', scary: 'intense', epic: 'intense'
+};
+
+function moodToRgbScaled(hex, intensity, mood) {
   let r = Math.round(parseInt(hex.slice(1, 3), 16));
   let g = Math.round(parseInt(hex.slice(3, 5), 16));
   let b = Math.round(parseInt(hex.slice(5, 7), 16));
-  return JSON.stringify({ cmd: 'set_rgb', r, g, b, intensity: parseFloat(intensity.toFixed(3)), duration_ms: 0, msg_id: ++serialMsgId });
+  const level = MOOD_PATTERN[mood] || 'medium';
+  const payload = { cmd: 'set_rgb', r, g, b, intensity: parseFloat(intensity.toFixed(3)), duration_ms: 0, msg_id: ++serialMsgId };
+  if (level === 'intense') {
+    payload.auto_cycle = true;
+    payload.speed = 1.6;
+  } else if (level === 'medium') {
+    payload.auto_cycle = true;
+    payload.speed = 1.0;
+  } else {
+    payload.pattern = 1;
+    payload.speed = 0.4;
+  }
+  return JSON.stringify(payload);
 }
 
 
@@ -903,13 +915,13 @@ function moodToRgbScaled(hex, intensity) {
 async function connectSerial() {
   try {
     port = await navigator.serial.requestPort();
+    try { await port.close(); } catch {} // clean up if stuck open from previous session
     await port.open({ baudRate: 115200 });
+    await port.setSignals({ dataTerminalReady: false, requestToSend: false });
 
-    const textEncoder = new TextEncoderStream();
-    textEncoder.readable.pipeTo(port.writable);
-    writer = textEncoder.writable.getWriter();
+    writer = port.writable.getWriter();
 
-    readFromArduino(); // 不要 await，保持后台读
+    readFromArduino(); 
 
     arduinoConnected = true;
     loadScreenEl.style.display = 'none';
@@ -921,9 +933,8 @@ async function connectSerial() {
 }
 
 async function readFromArduino() {
-  const textDecoder = new TextDecoderStream();
-  port.readable.pipeTo(textDecoder.writable);
-  reader = textDecoder.readable.getReader();
+  const decoder = new TextDecoder();
+  reader = port.readable.getReader();
 
   let rxBuffer = '';
 
@@ -933,7 +944,7 @@ async function readFromArduino() {
       if (done) break;
       if (!value) continue;
 
-      rxBuffer += value;
+      rxBuffer += decoder.decode(value, { stream: true });
       const lines = rxBuffer.split(/\r?\n/);
       rxBuffer = lines.pop() || '';
 
@@ -943,20 +954,16 @@ async function readFromArduino() {
 
         console.log('[SERIAL]', line);
 
-        // 如果是 JSON，就解析；否则只打印
         if (!line.startsWith('{')) continue;
 
         try {
           const msg = JSON.parse(line);
 
           if (msg.event === 'pc_led_gate') {
-            // Edge-detect: only act when gate transitions OFF -> ON
             const prev = pcLedGateEnabled;
             pcLedGateEnabled = !!msg.enabled;
             console.log('[GATE]', pcLedGateEnabled);
-
             if (!prev && pcLedGateEnabled && lastLedPayload) {
-              // Re-send the most recent LED command immediately so LED can resume instantly
               sendToArduino(lastLedPayload);
               console.log('[GATE] re-sent last LED payload');
             }
@@ -964,7 +971,7 @@ async function readFromArduino() {
 
           if (msg.event === 'mute_state') {
             setMuted(!!msg.muted);
-            console.log('[MUTE]', !!msg.muted);
+            console.warn('[MUTE]', !!msg.muted);
           }
         } catch (e) {
           console.warn('Failed to parse JSON from Arduino:', line, e);
@@ -975,12 +982,34 @@ async function readFromArduino() {
     console.error('readFromArduino error:', e);
   } finally {
     try { reader?.releaseLock(); } catch {}
+    try { writer?.releaseLock(); } catch {}
+    try { await port?.close(); } catch {}
+    arduinoConnected = false;
+    writer = null;
+    reader = null;
+    port   = null;
+    // Auto-retry after 4s — gives ESP32 time to finish resetting + calibration
+    if (loadScreenEl) {
+      loadScreenEl.style.display = 'flex';
+      let secs = 4;
+      const countdown = setInterval(() => {
+        setLoadStatus(`Arduino reset detected — reconnecting in ${secs}s...`);
+        secs--;
+        if (secs < 0) {
+          clearInterval(countdown);
+          connectSerial();
+        }
+      }, 1000);
+      setLoadStatus(`Arduino reset detected — reconnecting in ${secs}s...`);
+    }
   }
 }
 
 function setMuted(muted) {
   isMuted = !!muted;
   Howler.mute(isMuted);
+  if (currentBase) currentBase.mute(isMuted);
+  currentTextures.forEach(t => t.mute(isMuted));
   const btn = document.getElementById('mute-btn');
   if (btn) btn.textContent = isMuted ? 'Unmute' : 'Mute';
 }
@@ -995,7 +1024,7 @@ async function sendLedToArduino(data) {
 async function sendToArduino(data) {
   if (!writer) return;
   try {
-    await writer.write(String(data) + '\n'); 
+    await writer.write(new TextEncoder().encode(String(data) + '\n'));
     console.log('Sent to Arduino:', data);
   } catch (err) {
     console.error('Write error:', err);
